@@ -4,6 +4,9 @@ import os
 from phonemizer import phonemize
 import glob
 from tqdm import tqdm
+import re
+import time
+
 
 output_dir = './segmentedAudio/'   # path to where you want the segmented audio to go. dont touch this unless youre having issues
 bad_audio_dir = './badAudio/' # path to where you want the bad audio to go. dont touch this unless youre having issues
@@ -52,19 +55,30 @@ for sub_file in tqdm(srt_list):  # Iterate over all srt files
     The process I went through was to adjust buffer_time then run the script, listen to your segments in order. If you hear overlapping, artifacts between clips, and or cut off speech then adjust buffer_time. 
     I left the values I ended up using in the script. They may work as default for you, they may not.
     '''
-    
+    def convert_srt_time_to_milliseconds(srt_time):
+        """Convert SRT time format to milliseconds."""
+        hours, minutes, seconds_milliseconds = srt_time.split(':')
+        seconds, milliseconds = seconds_milliseconds.split(',')
+        
+        # Convert each part to milliseconds
+        total_milliseconds = (int(hours) * 3600 * 1000 + 
+                            int(minutes) * 60 * 1000 + 
+                            int(seconds) * 1000 + 
+                            int(milliseconds))
+        
+        return total_milliseconds
     
     with open('./trainingdata/output.txt', 'a+') as out_file:
     
         for i, sub in enumerate(subs):
             # get start and end times in milliseconds
-            start_time = (sub.start.minutes * 60 + sub.start.seconds) * 1000 + sub.start.milliseconds
-            end_time = (sub.end.minutes * 60 + sub.end.seconds) * 1000 + sub.start.milliseconds
-    
+            start_time = convert_srt_time_to_milliseconds(str(sub.start))
+            end_time = convert_srt_time_to_milliseconds(str(sub.end))
+
             if i < len(subs) - 1:
      
                 next_sub = subs[i + 1]
-                next_start_time = (next_sub.start.minutes * 60 + next_sub.start.seconds) * 1000 + next_sub.start.milliseconds
+                next_start_time = convert_srt_time_to_milliseconds(str(next_sub.start))
                 # get the gap to the next subtitle
                 gap_to_next = next_start_time - end_time
     

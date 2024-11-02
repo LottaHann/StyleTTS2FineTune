@@ -1,1 +1,3 @@
 /StyleGuide/StyleTTS2/*
+venv/
+makeDataset/tools/.env

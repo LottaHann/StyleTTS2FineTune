@@ -2,6 +2,9 @@ import os
 import glob
 from tqdm import tqdm
 import pysrt
+import firebase_admin
+from firebase_admin import firestore
+
 
 def parse_time(time_str):
     """Parse a time string from SRT format (HH:MM:SS,mmm) to milliseconds."""

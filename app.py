@@ -4,6 +4,7 @@ import yaml
 from app_func import makedataset, run_finetune, download_file, clear_directory, extract_zip, copy_files, update_config, run_finetune,  move_files, clean_exit, save_finetuned_model, finetune_process
 import shutil
 import os
+from download_model import download_model
 
 import firebase_admin
 from firebase_admin import credentials, storage
@@ -78,8 +79,10 @@ def finetune():
         update_config(DEFAULT_CONFIG_PATH, custom_config_path)
     else:
         shutil.copy(DEFAULT_CONFIG_PATH, FINAL_CONFIG_PATH)
+
+    download_model()
         
-    #run_finetune(voice_id)
+    run_finetune(voice_id)
 
     save_finetuned_model(voice_id)
 

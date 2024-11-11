@@ -1,14 +1,23 @@
 from flask import Flask, request, jsonify
-import os
-import requests
-import zipfile
+#from makedataset import makedataset
+import yaml
+from app_func import makedataset, run_finetune, download_file, clear_directory, extract_zip, copy_files, update_config, run_finetune,  move_files, clean_exit, save_finetuned_model, finetune_process
 import shutil
-from makedataset import makedataset
+import os
+
+import firebase_admin
+from firebase_admin import credentials, storage
+
+cred = credentials.Certificate('audiobookgen-firebase-adminsdk-mhp3c-544d551487.json')
+firebase_admin.initialize_app(cred, {
+    'storageBucket': 'audiobookgen.appspot.com'
+})
 
 app = Flask(__name__)
 
-# Path to the directory where audio files will be saved
 AUDIO_DIR = "./makeDataset/tools/audio"
+DEFAULT_CONFIG_PATH = './default_config.yml'
+FINAL_CONFIG_PATH = './model/StyleTTS2/Configs/config_ft.yml'
 
 @app.route('/finetune', methods=['POST'])
 def finetune():
@@ -21,82 +30,75 @@ def finetune():
         return jsonify({"error": "Missing voice_id or audio_zip_url"}), 400
 
     # Step 1: Download the audio zip
-    audio_zip_path = f"./audio_zips/{voice_id}_audio.zip"
+    audio_zip_path = f"./temp/{voice_id}_audio.zip"
     try:
         download_file(audio_zip_url, audio_zip_path)
     except Exception as e:
+        clean_exit()
         return jsonify({"error downloading audio files": str(e)}), 500
     
+        
     # Step 2: Clear the audio directory and extract the new audio files
     try:
-        clear_directory(AUDIO_DIR)  # Clear previous audio files
-        extract_zip(audio_zip_path, AUDIO_DIR)  # Extract new files into the audio directory
-        #copy_audio_files(AUDIO_DIR, './makeDataset/tools/audio')
+        clear_directory(AUDIO_DIR) 
+        extract_zip(audio_zip_path, AUDIO_DIR)
     except Exception as e:
+        clean_exit()
         return jsonify({"error extracting audio files": str(e)}), 500
     
-    # Step 3: Download and process the config file
-    config_path = f"./config/{voice_id}_config.yml"
-    if config_url:
-        download_file(config_url, config_path)
-    #else:
-        # Use default config if not provided
-        #shutil.copy('./default_config.yml', config_path)
-
-    # Step 4: Call dataset creation and finetuning
     makedataset()
-    run_finetune(f"./models/{voice_id}.pth", config_path)
+
+    wav_dir_for_finetuning = './model/StyleTTS2/Data/wavs'
+
+
+    clear_directory('model/StyleTTS2/Data')
+    
+    #create dir if it doesnt exist:
+    if not os.path.exists(wav_dir_for_finetuning):
+        os.makedirs(wav_dir_for_finetuning)
+        print("created wavs dir")
+    else:
+        clear_directory(wav_dir_for_finetuning)
+
+    try:
+        move_files('makeDataset/tools/segmentedAudio', wav_dir_for_finetuning)
+        move_files('makeDataset/tools/trainingdata', 'model/StyleTTS2/Data')
+        print("moved files")
+    except Exception as e:
+        clean_exit()        
+        return jsonify({"error moving audio files": str(e)}), 500
+    
+
+    shutil.copy('./OOD_texts.txt', './model/StyleTTS2/Data')
+
+    
+    custom_config_path = './temp/custom_config.yml'
+    if config_url:
+        download_file(config_url, custom_config_path)
+        update_config(DEFAULT_CONFIG_PATH, custom_config_path)
+    else:
+        shutil.copy(DEFAULT_CONFIG_PATH, FINAL_CONFIG_PATH)
+        
+    #run_finetune(voice_id)
+
+    save_finetuned_model(voice_id)
+
+    clear_directory('temp')
 
     return jsonify({"message": f"Model for {voice_id} trained successfully"}), 200
 
 
-def download_file(url, destination_path):
-    response = requests.get(url, stream=True)
-    if response.status_code == 200:
-        with open(destination_path, 'wb') as f:
-            shutil.copyfileobj(response.raw, f)
+@app.route('/stop_finetune', methods=['POST'])
+def stop_finetune():
+    global finetune_process
+    if finetune_process is not None:
+        finetune_process.terminate()  # Terminate the process
+        finetune_process = None  # Reset the process variable
+        return jsonify({"message": "Finetuning process stopped"}), 200
     else:
-        raise Exception(f"Failed to download file from {url}")
+        return jsonify({"error": "No finetuning process is running"}), 400
 
-def extract_zip(zip_path, extract_to):
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        temp_extract_dir = f"{extract_to}_temp"  # Temporary directory for extraction
-        zip_ref.extractall(temp_extract_dir)  # Extract all files to a temp directory
-
-        # Move files from temp directory to target directory
-        for root, _, files in os.walk(temp_extract_dir):
-            for file in files:
-                if file.endswith('.wav'):  # Only process audio files
-                    full_file_path = os.path.join(root, file)
-                    shutil.move(full_file_path, extract_to)  # Move to final destination
-
-        # Clean up the temporary directory
-        shutil.rmtree(temp_extract_dir)
-
-def clear_directory(directory):
-    """Remove all files in the specified directory."""
-    if os.path.exists(directory):
-        shutil.rmtree(directory)  # Remove all files and subdirectories
-    os.makedirs(directory, exist_ok=True)  # Recreate the empty directory
-
-def copy_audio_files(src_folder, dest_folder):
-    """Copy audio files from src_folder to dest_folder."""
-    # Clear the destination folder
-    if os.path.exists(dest_folder):
-        shutil.rmtree(dest_folder)
-    os.makedirs(dest_folder, exist_ok=True)
-    
-    # Copy only audio files from src_folder to dest_folder
-    for root, _, files in os.walk(src_folder):
-        for file in files:
-            if file.endswith('.wav'):  # Assuming the audio files are .wav format
-                full_file_path = os.path.join(root, file)
-                shutil.copy(full_file_path, dest_folder)
-
-def run_finetune(model_output_path, config_path):
-    # Your fine-tuning logic here (e.g., call StyleTTS2 fine-tune script)
-    print("ready to finetune:D")
-    return 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    #app.run(debug=True)
+    app.run(debug=False, host='0.0.0.0', port=5000)

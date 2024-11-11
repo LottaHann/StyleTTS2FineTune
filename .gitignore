@@ -1,3 +1,7 @@
 /StyleGuide/StyleTTS2/*
 venv/
 makeDataset/tools/.env
+audiobookgen-firebase-adminsdk-mhp3c-544d551487.json
+finetuned_models/*
+model/StyleTTS2/Models/LibreTTS/*
+model/StyleTTS2/Models/LJSpeech/epoch_2nd_00020.pth

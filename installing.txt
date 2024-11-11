@@ -1,0 +1,3 @@
+pip install soundfile
+conda install -c conda-forge libsndfile
+

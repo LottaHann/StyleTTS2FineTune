@@ -9,6 +9,7 @@ from makeDataset.tools.srtsegmenter_func import process_audio_segments
 import argparse
 import shutil
 from datetime import datetime
+import torch
 import yaml
 import subprocess
 import tarfile
@@ -22,8 +23,11 @@ finetune_process = None
 
 
 
-def makedataset():
-    audio_dir = "Data/wavs"
+def makedataset(audio_dir):
+    # name audio files
+    for i, filename in enumerate(os.listdir(audio_dir)):
+        os.rename(os.path.join(audio_dir, filename), os.path.join(audio_dir, f"{i+1}.wav"))
+    
     print("Transcribing audio files...")
     transcribe_all_files(audio_dir)
 
@@ -165,6 +169,9 @@ def run_finetune(voice_id):
     try:
         # Path to the StyleTTS2 directory where the command should be run
         styletts2_dir = os.path.join(os.getcwd(), "model/StyleTTS2")
+        
+        # print debug of gpu
+        print("GPU is available: ", torch.cuda.is_available())
         
         # Construct the shell command for running the finetuning
         command = [

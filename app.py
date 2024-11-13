@@ -9,7 +9,7 @@ from download_model import download_model
 import firebase_admin
 from firebase_admin import credentials, storage
 
-cred = credentials.Certificate('audiobookgen-firebase-adminsdk-mhp3c-544d551487.json')
+cred = credentials.Certificate('audiobookgen-firebase-adminsdk-mhp3c-3ecc20514f.json')
 firebase_admin.initialize_app(cred, {
     'storageBucket': 'audiobookgen.appspot.com'
 })
@@ -41,13 +41,20 @@ def finetune():
         
     # Step 2: Clear the audio directory and extract the new audio files
     try:
-        clear_directory(AUDIO_DIR) 
+            # Directories
+        output_dir = './makeDataset/tools/segmentedAudio/'
+        bad_audio_dir = './makeDataset/tools/badAudio/'
+        srt_dir = './makeDataset/tools/srt/'
+        audio_dir = './makeDataset/tools/audio/'
+        training_data_dir = './makeDataset/tools/trainingdata'
+        for dir in [output_dir, bad_audio_dir, srt_dir, audio_dir, training_data_dir]:
+            clear_directory(dir)
         extract_zip(audio_zip_path, AUDIO_DIR)
     except Exception as e:
         clean_exit()
         return jsonify({"error extracting audio files": str(e)}), 500
     
-    makedataset()
+    makedataset(audio_dir=AUDIO_DIR)
 
     wav_dir_for_finetuning = './model/StyleTTS2/Data/wavs'
 

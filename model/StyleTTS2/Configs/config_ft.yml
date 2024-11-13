@@ -2,7 +2,7 @@ ASR_config: Utils/ASR/config.yml
 ASR_path: Utils/ASR/epoch_00080.pth
 F0_path: Utils/JDC/bst.t7
 PLBERT_dir: Utils/PLBERT/
-batch_size: 12
+batch_size: 2
 data_params:
   OOD_data: Data/OOD_texts.txt
   min_length: 50
@@ -15,8 +15,8 @@ load_only_params: true
 log_dir: Models/LJSpeech
 log_interval: 10
 loss_params:
-  diff_epoch: 3
-  joint_epoch: 4
+  diff_epoch: 1
+  joint_epoch: 3
   lambda_F0: 1.0
   lambda_ce: 20.0
   lambda_diff: 1.0
@@ -28,7 +28,7 @@ loss_params:
   lambda_s2s: 1.0
   lambda_slm: 1.0
   lambda_sty: 1.0
-max_len: 400
+max_len: 175
 model_params:
   decoder:
     resblock_dilation_sizes:
@@ -46,7 +46,7 @@ model_params:
     - 7
     - 11
     type: hifigan
-    upsample_initial_channel: 512
+    upsample_initial_channel: 256
     upsample_kernel_sizes:
     - 20
     - 10
@@ -71,8 +71,8 @@ model_params:
       num_layers: 3
   dim_in: 64
   dropout: 0.2
-  hidden_dim: 512
-  max_conv_dim: 512
+  hidden_dim: 256
+  max_conv_dim: 256
   max_dur: 50
   multispeaker: true
   n_layer: 3
@@ -101,7 +101,7 @@ second_stage_load_pretrained: true
 slmadv_params:
   batch_percentage: 0.5
   iter: 10
-  max_len: 800
+  max_len: 175
   min_len: 100
   scale: 0.01
   sig: 1.5

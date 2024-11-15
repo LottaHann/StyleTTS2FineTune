@@ -51,9 +51,7 @@ class AudioProcessor:
 
     @staticmethod
     def process_dataset(audio_dir: str) -> None:
-        """Process audio files and create dataset"""
-        AudioProcessor.rename_audio_files(audio_dir)
-        
+        """Process audio files and create dataset"""        
         print("Transcribing audio files...")
         transcribe_all_files(audio_dir)
         

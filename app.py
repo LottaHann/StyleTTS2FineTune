@@ -7,6 +7,7 @@ from firebase_admin import credentials
 import requests
 from training_texts import TRAINING_TEXTS
 from pydub import AudioSegment
+import time
 
 from app_func import (
     AudioProcessor,
@@ -67,43 +68,101 @@ def generate_training_audio(voice_id: str) -> None:
     # Ensure audio directory exists and is empty
     FileHandler.clear_directory(Config.AUDIO_DIR)
     os.makedirs(Config.AUDIO_DIR, exist_ok=True)
+    print(f"Audio directory contents (should be empty): {os.listdir(Config.AUDIO_DIR)}")
+
+    failed_generations = []
+    successful_generations = []
 
     for idx, text in enumerate(TRAINING_TEXTS, 1):
-        data = {
-            "text": text,
-            "model_id": "eleven_monolingual_v1",
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "style": 0.1,
-                "use_speaker_boost": False
+        output_path = os.path.join(Config.AUDIO_DIR, f"{idx}.wav")
+        temp_mp3_path = os.path.join(Config.AUDIO_DIR, f"temp_{idx}.mp3")
+
+        try:
+            data = {
+                "text": text,
+                "model_id": "eleven_monolingual_v1",
+                "voice_settings": {
+                    "stability": 0.5,
+                    "similarity_boost": 0.75,
+                    "style": 0.1,
+                    "use_speaker_boost": False
+                }
             }
-        }
 
-        # Make request to ElevenLabs API
-        response = requests.post(
-            f"{Config.ELEVENLABS_API_URL}/{voice_id}",
-            json=data,
-            headers=headers
-        )
+            # Make request to ElevenLabs API
+            response = requests.post(
+                f"{Config.ELEVENLABS_API_URL}/{voice_id}",
+                json=data,
+                headers=headers,
+                timeout=30  # Add timeout
+            )
 
-        if response.status_code == 200:
+            response.raise_for_status()  # Raise exception for bad status codes
+
             # Save the audio file temporarily as MP3
-            temp_mp3_path = os.path.join(Config.AUDIO_DIR, f"temp_{idx}.mp3")
             with open(temp_mp3_path, 'wb') as f:
                 f.write(response.content)
 
             # Convert MP3 to WAV
             print(f"Converting audio {idx} to WAV format...")
             audio = AudioSegment.from_mp3(temp_mp3_path)
-            output_path = os.path.join(Config.AUDIO_DIR, f"{idx}.wav")
             audio.export(output_path, format='wav')
 
-            # Remove temporary MP3 file
-            os.remove(temp_mp3_path)
-            print(f"Generated audio for text {idx}")
-        else:
-            raise Exception(f"Failed to generate audio for text {idx}: {response.text}")
+            # Verify the WAV file exists and has size > 0
+            if not os.path.exists(output_path):
+                raise Exception(f"Generated WAV file is missing")
+            if os.path.getsize(output_path) == 0:
+                raise Exception(f"Generated WAV file is empty")
+
+            successful_generations.append(idx)
+            print(f"Successfully generated audio for text {idx}")
+
+        except requests.exceptions.RequestException as e:
+            failed_generations.append((idx, f"API request failed: {str(e)}"))
+            print(f"Failed to generate audio {idx}: API error - {str(e)}")
+        except Exception as e:
+            failed_generations.append((idx, f"Processing failed: {str(e)}"))
+            print(f"Failed to generate audio {idx}: {str(e)}")
+        finally:
+            # Clean up temp MP3 file if it exists
+            if os.path.exists(temp_mp3_path):
+                os.remove(temp_mp3_path)
+
+    # Final verification with retries
+    max_retries = 3
+    for attempt in range(max_retries):
+        actual_files = os.listdir(Config.AUDIO_DIR)
+        print(f"\nFinal Verification (Attempt {attempt + 1}/{max_retries}):")
+        print(f"Expected files: {len(TRAINING_TEXTS)}")
+        print(f"Successfully generated: {len(successful_generations)}")
+        print(f"Actually present in directory: {len(actual_files)}")
+        print(f"Files present: {actual_files}")
+        
+        if len(actual_files) == len(TRAINING_TEXTS):
+            # Verify each file is readable
+            all_files_readable = True
+            for filename in actual_files:
+                file_path = os.path.join(Config.AUDIO_DIR, filename)
+                try:
+                    with open(file_path, 'rb') as f:
+                        # Try to read the first byte
+                        f.read(1)
+                except Exception as e:
+                    print(f"File {filename} is not readable: {str(e)}")
+                    all_files_readable = False
+            
+            if all_files_readable:
+                print("All files verified and readable")
+                time.sleep(2)  # Wait for file system to stabilize
+                return
+        
+        print(f"Missing files: {set(f'{i}.wav' for i in range(1, len(TRAINING_TEXTS) + 1)) - set(actual_files)}")
+        time.sleep(2)  # Wait before retry
+    
+    raise Exception(
+        f"Audio generation verification failed after {max_retries} attempts. "
+        f"Expected {len(TRAINING_TEXTS)} files, but {len(actual_files)} were present."
+    )
 
 @app.route('/finetune', methods=['POST'])
 def finetune():

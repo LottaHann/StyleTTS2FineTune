@@ -5,7 +5,7 @@ from tqdm import tqdm
 import glob
 import math
 
-def is_silent_rms(audio_chunk, rms_thresh=100):
+def is_silent_rms(audio_chunk, rms_thresh=120):
     """Check if an audio chunk is silent using direct RMS threshold"""
     return audio_chunk.rms < rms_thresh
 
@@ -37,7 +37,7 @@ def add_silence_buffers(audio, target_silence=200):
     
     # Find first non-silent part with lower threshold
     for i in range(0, len(audio)-10, 10):
-        if not is_silent_rms(audio[i:i+10], 150):  # Increased threshold
+        if not is_silent_rms(audio[i:i+10], 120):
             silence_start = i
             break
     else:
@@ -45,21 +45,21 @@ def add_silence_buffers(audio, target_silence=200):
 
     # Find last non-silent part with lower threshold
     for i in range(len(audio)-10, 0, -10):
-        if not is_silent_rms(audio[i:i+10], 150):  # Increased threshold
+        if not is_silent_rms(audio[i:i+10], 120):
             silence_end = len(audio) - i
             break
     else:
         silence_end = 0
 
-    # Calculate needed silence
-    start_buffer = max(0, target_silence - silence_start)
-    end_buffer = max(0, target_silence - silence_end)
+    # Calculate needed silence with a bit more buffer
+    start_buffer = max(0, target_silence - silence_start) + 50
+    end_buffer = max(0, target_silence - silence_end) + 50
 
     result = (AudioSegment.silent(duration=start_buffer) + 
              audio + 
              AudioSegment.silent(duration=end_buffer))
     
-    # Apply crossfade at the boundaries if possible
+    # Apply gentler crossfade at the boundaries
     if len(result) > crossfade_duration * 2:
         result = result.fade_in(crossfade_duration).fade_out(crossfade_duration)
     
@@ -197,17 +197,30 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
         
         with open(os.path.join(dirs['training'], 'output.txt'), 'a') as out_file:
             for i, sub in enumerate(subs):
-                # Add detailed timing logs
+                # Calculate cut points
+                current_end = sub.end.ordinal
+                next_start = subs[i + 1].start.ordinal if i < len(subs) - 1 else None
+                
+                # Calculate the start point (using previous midpoint if available)
+                if i > 0:
+                    prev_end = subs[i-1].end.ordinal
+                    start_point = prev_end + (sub.start.ordinal - prev_end) // 2
+                else:
+                    start_point = sub.start.ordinal
+                
+                # Calculate the end point (using next midpoint if available)
+                if next_start is not None:
+                    end_point = current_end + (next_start - current_end) // 2
+                else:
+                    end_point = current_end
+
+                # Extract and clean segment using the new points
+                segment = audio[start_point:end_point]
                 print(f"\nSubtitle {i+1}/{len(subs)}:")
                 print(f"Original timing: {sub.start} -> {sub.end}")
+                print(f"Modified timing: {start_point}ms -> {end_point}ms")
                 print(f"Text: {sub.text.strip()}")
                 
-                # Convert times to milliseconds
-                start = sub.start.ordinal
-                end = sub.end.ordinal
-                
-                # Extract and clean segment
-                segment = audio[start:end]
                 print(f"Segment duration before cleaning: {len(segment)}ms")
                 cleaned = clean_segment(segment)
                 print(f"Segment duration after cleaning: {len(cleaned)}ms")
@@ -216,7 +229,7 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
                     current_segment = {
                         'audio': cleaned,
                         'text': sub.text.strip(),
-                        'start': start
+                        'start': start_point
                     }
                     continue
                 
@@ -265,7 +278,7 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
                     current_segment = {
                         'audio': cleaned,
                         'text': sub.text.strip(),
-                        'start': start
+                        'start': start_point
                     }
             
             # Process the last segment if it exists
@@ -307,22 +320,21 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
     return total_segment_count, total_duration
 
 if __name__ == "__main__":
-    # Test silence optimization with specific file
-    test_file = "./10_1.wav"
+    test_file = "./raw_3.wav"
+    print(f"Testing processing on {test_file}")
+    
+    # Load full audio
     audio = AudioSegment.from_wav(test_file)
+    print(f"Full audio duration: {len(audio)}ms")
     
-    print("Original duration:", len(audio), "ms")
+    # Segment 1: 0ms -> 5040ms
+    print("\nProcessing Segment 1:")
+    segment1 = audio[0:5040]
+    print(f"Original duration: {len(segment1)}ms")
     
-    # Add silence buffers first (to simulate real processing)
-    audio_with_buffers = add_silence_buffers(audio)
-    print("Duration after adding buffers:", len(audio_with_buffers), "ms")
-    
-    # Test silence optimization
-    optimized = optimize_silence(audio_with_buffers)
-    print("Duration after silence optimization:", len(optimized), "ms")
-    print(f"Total reduction: {len(audio_with_buffers) - len(optimized)} ms")
-    
-    # Export the versions for comparison
-    audio.export("./test_original.wav", format="wav")
-    audio_with_buffers.export("./test_with_buffers.wav", format="wav")
-    optimized.export("./test_optimized.wav", format="wav")
+    cleaned1 = clean_segment(segment1)
+    buffered1 = add_silence_buffers(cleaned1, target_silence=200)
+    optimized1, orig_dur1, final_dur1 = optimize_silence(buffered1)
+    optimized1.export("./raw_3_optimized1.wav", format="wav")
+    buffered1.export("./raw_3_buffered1.wav", format="wav")
+    cleaned1.export("./raw_3_cleaned1.wav", format="wav")

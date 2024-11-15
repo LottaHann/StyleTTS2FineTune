@@ -214,18 +214,6 @@ def _create_dataset() -> None:
     os.makedirs(Config.WAV_DIR_FINETUNING, exist_ok=True)
     FileHandler.clear_directory(Config.WAV_DIR_FINETUNING)
     
-    # Create a raw directory inside the wavs directory
-    raw_dir = os.path.join(Config.WAV_DIR_FINETUNING, 'raw')
-    os.makedirs(raw_dir, exist_ok=True)
-    
-    # Copy raw audio files
-    for file in os.listdir(Config.AUDIO_DIR):
-        if file.endswith('.wav'):
-            shutil.copy(
-                os.path.join(Config.AUDIO_DIR, file),
-                os.path.join(raw_dir, f'raw_{file}')
-            )
-    
     # Move segmented files
     FileHandler.move_files('makeDataset/tools/segmentedAudio', Config.WAV_DIR_FINETUNING)
     FileHandler.move_files('makeDataset/tools/trainingdata', 'model/StyleTTS2/Data')

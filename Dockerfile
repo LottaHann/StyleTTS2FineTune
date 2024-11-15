@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 
-# Install system dependencies
+# Install system dependencies including ffmpeg
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     bzip2 \
     ca-certificates \
+    ffmpeg \
+    libavcodec-extra \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

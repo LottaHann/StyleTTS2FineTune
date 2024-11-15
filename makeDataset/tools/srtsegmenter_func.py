@@ -117,6 +117,7 @@ def optimize_silence(audio, min_silence_len=200, max_silence_len=500, step=10):
 
 def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000):
     """Main processing function"""
+    print("Processing audio segments...")
     # Setup directories
     dirs = {
         'output': './makeDataset/tools/segmentedAudio/',

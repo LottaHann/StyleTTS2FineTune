@@ -32,17 +32,20 @@ def clean_segment(audio):
 
 def add_silence_buffers(audio, target_silence=200):
     """Add silence to ensure target_silence ms of silence at start and end"""
-    # Find first non-silent part
+    # Add a small crossfade to prevent abrupt cuts
+    crossfade_duration = 50  # ms
+    
+    # Find first non-silent part with lower threshold
     for i in range(0, len(audio)-10, 10):
-        if not is_silent_rms(audio[i:i+10]):
+        if not is_silent_rms(audio[i:i+10], 150):  # Increased threshold
             silence_start = i
             break
     else:
         silence_start = 0
 
-    # Find last non-silent part
+    # Find last non-silent part with lower threshold
     for i in range(len(audio)-10, 0, -10):
-        if not is_silent_rms(audio[i:i+10]):
+        if not is_silent_rms(audio[i:i+10], 150):  # Increased threshold
             silence_end = len(audio) - i
             break
     else:
@@ -52,10 +55,15 @@ def add_silence_buffers(audio, target_silence=200):
     start_buffer = max(0, target_silence - silence_start)
     end_buffer = max(0, target_silence - silence_end)
 
-    # Add silence
-    return (AudioSegment.silent(duration=start_buffer) + 
-            audio + 
-            AudioSegment.silent(duration=end_buffer))
+    result = (AudioSegment.silent(duration=start_buffer) + 
+             audio + 
+             AudioSegment.silent(duration=end_buffer))
+    
+    # Apply crossfade at the boundaries if possible
+    if len(result) > crossfade_duration * 2:
+        result = result.fade_in(crossfade_duration).fade_out(crossfade_duration)
+    
+    return result
 
 def optimize_silence(audio, min_silence_len=200, max_silence_len=500, step=10):
     """
@@ -189,14 +197,20 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
         
         with open(os.path.join(dirs['training'], 'output.txt'), 'a') as out_file:
             for i, sub in enumerate(subs):
-                print(f"Processing subtitle {i+1}/{len(subs)}: {sub.text.strip()}")
+                # Add detailed timing logs
+                print(f"\nSubtitle {i+1}/{len(subs)}:")
+                print(f"Original timing: {sub.start} -> {sub.end}")
+                print(f"Text: {sub.text.strip()}")
+                
                 # Convert times to milliseconds
                 start = sub.start.ordinal
                 end = sub.end.ordinal
                 
                 # Extract and clean segment
                 segment = audio[start:end]
+                print(f"Segment duration before cleaning: {len(segment)}ms")
                 cleaned = clean_segment(segment)
+                print(f"Segment duration after cleaning: {len(cleaned)}ms")
                 
                 if current_segment is None:
                     current_segment = {

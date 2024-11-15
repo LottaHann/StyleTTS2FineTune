@@ -31,11 +31,8 @@ def clean_segment(audio):
     return audio
 
 def add_silence_buffers(audio, target_silence=200):
-    """Add silence to ensure target_silence ms of silence at start and end"""
-    # Add a small crossfade to prevent abrupt cuts
-    crossfade_duration = 50  # ms
-    
-    # Find first non-silent part with lower threshold
+    """Standardize silence to exactly target_silence ms at start and end"""    
+    # Find first non-silent part
     for i in range(0, len(audio)-10, 10):
         if not is_silent_rms(audio[i:i+10], 120):
             silence_start = i
@@ -43,7 +40,7 @@ def add_silence_buffers(audio, target_silence=200):
     else:
         silence_start = 0
 
-    # Find last non-silent part with lower threshold
+    # Find last non-silent part
     for i in range(len(audio)-10, 0, -10):
         if not is_silent_rms(audio[i:i+10], 120):
             silence_end = len(audio) - i
@@ -51,19 +48,23 @@ def add_silence_buffers(audio, target_silence=200):
     else:
         silence_end = 0
 
-    # Calculate needed silence with a bit more buffer
-    start_buffer = max(0, target_silence - silence_start) + 50
-    end_buffer = max(0, target_silence - silence_end) + 50
+    # Trim or add silence at start
+    if silence_start > target_silence:
+        # If too much silence, trim from left
+        audio = audio[(silence_start - target_silence):]
+    elif silence_start < target_silence:
+        # If too little silence, add more
+        audio = AudioSegment.silent(duration=target_silence - silence_start) + audio
 
-    result = (AudioSegment.silent(duration=start_buffer) + 
-             audio + 
-             AudioSegment.silent(duration=end_buffer))
+    # Trim or add silence at end
+    if silence_end > target_silence:
+        # If too much silence, trim from right
+        audio = audio[:-1 * (silence_end - target_silence)]
+    elif silence_end < target_silence:
+        # If too little silence, add more
+        audio = audio + AudioSegment.silent(duration=target_silence - silence_end)
     
-    # Apply gentler crossfade at the boundaries
-    if len(result) > crossfade_duration * 2:
-        result = result.fade_in(crossfade_duration).fade_out(crossfade_duration)
-    
-    return result
+    return audio
 
 def optimize_silence(audio, min_silence_len=200, max_silence_len=500, step=10):
     """

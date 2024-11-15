@@ -1,8 +1,12 @@
 import os
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import shutil
 import firebase_admin
 from firebase_admin import credentials
+import requests
+from training_texts import TRAINING_TEXTS
+from pydub import AudioSegment
 
 from app_func import (
     AudioProcessor,
@@ -14,6 +18,9 @@ from app_func import (
     finetune_process
 )
 from download_model import download_model
+
+# Load environment variables from .env file
+load_dotenv()
 
 class Config:
     """Application configuration"""
@@ -30,9 +37,16 @@ class Config:
     FIREBASE_CREDENTIALS = 'audiobookgen-firebase-adminsdk-mhp3c-3ecc20514f.json'
     FIREBASE_BUCKET = 'audiobookgen.appspot.com'
     
+    # ElevenLabs configuration
+    ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
+    ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+    
     @classmethod
     def initialize_firebase(cls) -> None:
         """Initialize Firebase with credentials"""
+        if not cls.ELEVENLABS_API_KEY:
+            raise ValueError("ELEVENLABS_API_KEY environment variable is not set")
+            
         cred = credentials.Certificate(cls.FIREBASE_CREDENTIALS)
         firebase_admin.initialize_app(cred, {
             'storageBucket': cls.FIREBASE_BUCKET
@@ -42,26 +56,76 @@ class Config:
 app = Flask(__name__)
 Config.initialize_firebase()
 
+def generate_training_audio(voice_id: str) -> None:
+    """Generate training audio using ElevenLabs API"""
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": Config.ELEVENLABS_API_KEY
+    }
+
+    # Ensure audio directory exists and is empty
+    FileHandler.clear_directory(Config.AUDIO_DIR)
+    os.makedirs(Config.AUDIO_DIR, exist_ok=True)
+
+    for idx, text in enumerate(TRAINING_TEXTS, 1):
+        data = {
+            "text": text,
+            "model_id": "eleven_monolingual_v1",
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75,
+                "style": 0.1,
+                "use_speaker_boost": False
+            }
+        }
+
+        # Make request to ElevenLabs API
+        response = requests.post(
+            f"{Config.ELEVENLABS_API_URL}/{voice_id}",
+            json=data,
+            headers=headers
+        )
+
+        if response.status_code == 200:
+            # Save the audio file temporarily as MP3
+            temp_mp3_path = os.path.join(Config.AUDIO_DIR, f"temp_{idx}.mp3")
+            with open(temp_mp3_path, 'wb') as f:
+                f.write(response.content)
+
+            # Convert MP3 to WAV
+            print(f"Converting audio {idx} to WAV format...")
+            audio = AudioSegment.from_mp3(temp_mp3_path)
+            output_path = os.path.join(Config.AUDIO_DIR, f"{idx}.wav")
+            audio.export(output_path, format='wav')
+
+            # Remove temporary MP3 file
+            os.remove(temp_mp3_path)
+            print(f"Generated audio for text {idx}")
+        else:
+            raise Exception(f"Failed to generate audio for text {idx}: {response.text}")
+
 @app.route('/finetune', methods=['POST'])
 def finetune():
     """Handle finetuning request"""
     try:
         data = request.json
         voice_id = data.get('voice_id')
-        audio_zip_url = data.get('audio_zip_url')
         config_url = data.get('config_url')
         dataset_only = data.get('dataset_only', False)
 
-        if not voice_id or not audio_zip_url:
-            return jsonify({"error": "Missing voice_id or audio_zip_url"}), 400
+        if not voice_id:
+            return jsonify({"error": "Missing voice_id"}), 400
 
         # Clear directories
         for dir_path in [Config.RAW_SRT_DIR, Config.SRT_DIR]:
             FileHandler.clear_directory(dir_path)
 
-        # Process audio files
-        audio_zip_path = os.path.join(Config.TEMP_DIR, f"{voice_id}_audio.zip")
-        _process_audio_files(audio_zip_url, audio_zip_path)
+        # Generate training audio using ElevenLabs
+        generate_training_audio(voice_id)
+        
+        # Process the generated audio files
+        AudioProcessor.process_dataset(Config.AUDIO_DIR)
         
         # Create dataset
         _create_dataset()
@@ -83,13 +147,6 @@ def finetune():
     except Exception as e:
         clean_exit()
         return jsonify({"error": str(e)}), 500
-
-def _process_audio_files(audio_zip_url: str, audio_zip_path: str) -> None:
-    """Process audio files for training"""
-    FileHandler.download_file(audio_zip_url, audio_zip_path)
-    FileHandler.clear_directory(Config.AUDIO_DIR)
-    FileHandler.extract_zip(audio_zip_path, Config.AUDIO_DIR)
-    AudioProcessor.process_dataset(Config.AUDIO_DIR)
 
 def _create_dataset() -> None:
     """Create and organize dataset structure"""

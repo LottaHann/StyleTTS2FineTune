@@ -140,6 +140,14 @@ class FileHandler:
                 full_file_path = os.path.join(root, file)
                 shutil.move(full_file_path, dest_folder)
 
+    @staticmethod
+    def copy_files(src_folder: str, dest_folder: str) -> None:
+        """Copy all files from source to destination folder"""
+        for root, _, files in os.walk(src_folder):
+            for file in files:
+                full_file_path = os.path.join(root, file)
+                shutil.copy(full_file_path, dest_folder)
+
 class ModelHandler:
     @staticmethod
     def find_newest_model(directory: str) -> Optional[str]:

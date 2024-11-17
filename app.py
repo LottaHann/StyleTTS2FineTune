@@ -5,7 +5,6 @@ import shutil
 import firebase_admin
 from firebase_admin import credentials
 import requests
-from training_texts import TRAINING_TEXTS
 from pydub import AudioSegment
 import time
 
@@ -57,7 +56,7 @@ class Config:
 app = Flask(__name__)
 Config.initialize_firebase()
 
-def generate_training_audio(voice_id: str) -> None:
+def generate_training_audio(voice_id: str, training_texts: list) -> None:
     """Generate training audio using ElevenLabs API"""
     headers = {
         "Accept": "audio/mpeg",
@@ -73,7 +72,7 @@ def generate_training_audio(voice_id: str) -> None:
     failed_generations = []
     successful_generations = []
 
-    for idx, text in enumerate(TRAINING_TEXTS, 1):
+    for idx, text in enumerate(training_texts, 1):
         output_path = os.path.join(Config.AUDIO_DIR, f"{idx}.wav")
         temp_mp3_path = os.path.join(Config.AUDIO_DIR, f"temp_{idx}.mp3")
 
@@ -84,7 +83,7 @@ def generate_training_audio(voice_id: str) -> None:
                 "voice_settings": {
                     "stability": 0.5,
                     "similarity_boost": 0.8,
-                    "style": 0.05,
+                    "style": 0.00,
                     "use_speaker_boost": True
                 }
             }
@@ -133,12 +132,12 @@ def generate_training_audio(voice_id: str) -> None:
     for attempt in range(max_retries):
         actual_files = os.listdir(Config.AUDIO_DIR)
         print(f"\nFinal Verification (Attempt {attempt + 1}/{max_retries}):")
-        print(f"Expected files: {len(TRAINING_TEXTS)}")
+        print(f"Expected files: {len(training_texts)}")
         print(f"Successfully generated: {len(successful_generations)}")
         print(f"Actually present in directory: {len(actual_files)}")
         print(f"Files present: {actual_files}")
         
-        if len(actual_files) == len(TRAINING_TEXTS):
+        if len(actual_files) == len(training_texts):
             # Verify each file is readable
             all_files_readable = True
             for filename in actual_files:
@@ -156,12 +155,12 @@ def generate_training_audio(voice_id: str) -> None:
                 time.sleep(2)  # Wait for file system to stabilize
                 return
         
-        print(f"Missing files: {set(f'{i}.wav' for i in range(1, len(TRAINING_TEXTS) + 1)) - set(actual_files)}")
+        print(f"Missing files: {set(f'{i}.wav' for i in range(1, len(training_texts) + 1)) - set(actual_files)}")
         time.sleep(2)  # Wait before retry
     
     raise Exception(
         f"Audio generation verification failed after {max_retries} attempts. "
-        f"Expected {len(TRAINING_TEXTS)} files, but {len(actual_files)} were present."
+        f"Expected {len(training_texts)} files, but {len(actual_files)} were present."
     )
 
 @app.route('/finetune', methods=['POST'])
@@ -172,17 +171,30 @@ def finetune():
         voice_id = data.get('voice_id')
         config_url = data.get('config_url')
         dataset_only = data.get('dataset_only', False)
+        dataset_percentage = data.get('dataset_percentage', 0.05)
+
+        print(f"Received request with dataset_percentage: {dataset_percentage}")
 
         if not voice_id:
             return jsonify({"error": "Missing voice_id"}), 400
+
+        if not 0 < dataset_percentage <= 1:
+            return jsonify({"error": "dataset_percentage must be between 0 and 1"}), 400
+
+        # Get the training texts
+        from training_texts import get_dataset
+        training_texts = get_dataset(dataset_percentage)
+        
+        if not training_texts:
+            return jsonify({"error": "No training texts generated"}), 500
 
         # Clear directories
         for dir_path in [Config.RAW_SRT_DIR, Config.SRT_DIR]:
             FileHandler.clear_directory(dir_path)
 
         # Generate training audio using ElevenLabs
-        generate_training_audio(voice_id)
-        
+        generate_training_audio(voice_id, training_texts)  # Pass training_texts as parameter
+
         # Process the generated audio files
         AudioProcessor.process_dataset(Config.AUDIO_DIR)
         
@@ -212,13 +224,13 @@ def _create_dataset() -> None:
     # Clear and create directories
     FileHandler.clear_directory('model/StyleTTS2/Data')
     os.makedirs(Config.WAV_DIR_FINETUNING, exist_ok=True)
+    os.makedirs('model/StyleTTS2/Data/raw_wavs', exist_ok=True)
     FileHandler.clear_directory(Config.WAV_DIR_FINETUNING)
-
-    FileHandler.move_files('makeDataset/tools/audio', 'model/StyleTTS2/Data/raw_wavs')
     
     # Move segmented files
     FileHandler.move_files('makeDataset/tools/segmentedAudio', Config.WAV_DIR_FINETUNING)
     FileHandler.move_files('makeDataset/tools/trainingdata', 'model/StyleTTS2/Data')
+    FileHandler.copy_files('makeDataset/tools/audio', 'model/StyleTTS2/Data/raw_wavs')
     shutil.copy('./OOD_texts.txt', './model/StyleTTS2/Data')
 
 def _handle_dataset_only(voice_id: str) -> tuple:

@@ -80,12 +80,12 @@ def generate_training_audio(voice_id: str) -> None:
         try:
             data = {
                 "text": text,
-                "model_id": "eleven_monolingual_v1",
+                "model_id": "eleven_multilingual_v2",
                 "voice_settings": {
                     "stability": 0.5,
-                    "similarity_boost": 0.75,
-                    "style": 0.1,
-                    "use_speaker_boost": False
+                    "similarity_boost": 0.8,
+                    "style": 0.05,
+                    "use_speaker_boost": True
                 }
             }
 
@@ -190,7 +190,7 @@ def finetune():
         _create_dataset()
 
         if dataset_only:
-            return _handle_dataset_only()
+            return _handle_dataset_only(voice_id)
 
         # Handle configuration and model
         _handle_configuration(config_url)
@@ -213,15 +213,17 @@ def _create_dataset() -> None:
     FileHandler.clear_directory('model/StyleTTS2/Data')
     os.makedirs(Config.WAV_DIR_FINETUNING, exist_ok=True)
     FileHandler.clear_directory(Config.WAV_DIR_FINETUNING)
+
+    FileHandler.move_files('makeDataset/tools/audio', 'model/StyleTTS2/Data/raw_wavs')
     
     # Move segmented files
     FileHandler.move_files('makeDataset/tools/segmentedAudio', Config.WAV_DIR_FINETUNING)
     FileHandler.move_files('makeDataset/tools/trainingdata', 'model/StyleTTS2/Data')
     shutil.copy('./OOD_texts.txt', './model/StyleTTS2/Data')
 
-def _handle_dataset_only() -> tuple:
+def _handle_dataset_only(voice_id: str) -> tuple:
     """Handle dataset-only mode"""
-    dataset_path = save_dataset()
+    dataset_path = save_dataset(voice_id)
     if not dataset_path:
         clean_exit()
         return jsonify({"error": "Failed to save or upload dataset"}), 500

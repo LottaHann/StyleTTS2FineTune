@@ -193,15 +193,29 @@ SAD = [
     "Exactly. We'll get through this together, just like he would have wanted us to."
 ]
 
-percentage_of_data = 0.05
-
-# Create new arrays with the percentage of data
-CONFUSED_SCARED_ANGRY = CONFUSED_SCARED_ANGRY[:int(len(CONFUSED_SCARED_ANGRY) * percentage_of_data)]
-FEAR = FEAR[:int(len(FEAR) * percentage_of_data)]
-ROMANCE = ROMANCE[:int(len(ROMANCE) * percentage_of_data)]
-NORMAL = NORMAL[:int(len(NORMAL) * percentage_of_data)]
-HAPPY = HAPPY[:int(len(HAPPY) * percentage_of_data)]
-SAD = SAD[:int(len(SAD) * percentage_of_data)]
-
-# Combine the shortened arrays
-TRAINING_TEXTS = CONFUSED_SCARED_ANGRY + FEAR + ROMANCE + NORMAL + HAPPY + SAD
+def get_dataset(percentage: float) -> list:
+    """Get a subset of the training texts based on the given percentage"""
+    print(f"Getting dataset with percentage: {percentage}")
+    
+    # Calculate arrays with percentage
+    shortened_confused = CONFUSED_SCARED_ANGRY[:int(len(CONFUSED_SCARED_ANGRY) * percentage)]
+    shortened_fear = FEAR[:int(len(FEAR) * percentage)]
+    shortened_romance = ROMANCE[:int(len(ROMANCE) * percentage)]
+    shortened_normal = NORMAL[:int(len(NORMAL) * percentage)]
+    shortened_happy = HAPPY[:int(len(HAPPY) * percentage)]
+    shortened_sad = SAD[:int(len(SAD) * percentage)]
+    
+    # Log the number of texts from each category
+    print(f"Confused texts: {len(shortened_confused)}")
+    print(f"Fear texts: {len(shortened_fear)}")
+    print(f"Romance texts: {len(shortened_romance)}")
+    print(f"Normal texts: {len(shortened_normal)}")
+    print(f"Happy texts: {len(shortened_happy)}")
+    print(f"Sad texts: {len(shortened_sad)}")
+    
+    # Combine all texts
+    training_texts = shortened_confused + shortened_fear + shortened_romance + \
+                    shortened_normal + shortened_happy + shortened_sad
+    
+    print(f"Total training texts: {len(training_texts)}")
+    return training_texts

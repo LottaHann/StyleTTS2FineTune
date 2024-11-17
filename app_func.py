@@ -251,15 +251,15 @@ def clean_exit() -> None:
     print("Exiting the application...")
     exit(0)
 
-def save_dataset() -> Optional[str]:
+def save_dataset(voice_id: str) -> Optional[str]:
     """Save and upload the dataset with 24kHz audio files"""
     print("Saving the dataset...")
     try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%y.%m.%d_%H.%M")
         os.makedirs(Config.FINETUNED_DIR, exist_ok=True)
         
-        zip_path = os.path.join(Config.FINETUNED_DIR, f"dataset_{timestamp}.zip")
-        destination_blob_name = f"finetuned_models/dataset_{timestamp}.zip"
+        zip_path = os.path.join(Config.FINETUNED_DIR, f"dataset_{voice_id}_{timestamp}.zip")
+        destination_blob_name = f"finetuned_models/dataset_{voice_id}_{timestamp}.zip"
         temp_audio_dir = os.path.join(Config.FINETUNED_DIR, "temp_audio")
         os.makedirs(temp_audio_dir, exist_ok=True)
 
@@ -288,6 +288,13 @@ def save_dataset() -> Optional[str]:
             zip_file.write(train_list_path, 'train_data.txt')
             zip_file.write(val_list_path, 'validation_data.txt')
             zip_file.write(ood_path, 'OOD_data.txt')
+
+            # Add raw_wavs
+            raw_wavs_dir = os.path.join(Config.DATASET_PATHS['data'], 'raw_wavs')
+            for root, _, files in os.walk(raw_wavs_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    zip_file.write(file_path, os.path.join('raw_wavs', file))
 
         # Clean up temporary directory
         shutil.rmtree(temp_audio_dir)

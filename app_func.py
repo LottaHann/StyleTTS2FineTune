@@ -3,7 +3,7 @@ import requests
 import shutil
 import zipfile
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import torch
 import yaml
 import subprocess
@@ -14,6 +14,7 @@ from firebase_admin import storage
 from google.cloud import firestore
 import librosa
 import soundfile as sf
+import pytz
 
 from makeDataset.tools.format_srt import format_srt_file
 from makeDataset.tools.transcribe_audio import transcribe_all_files
@@ -263,7 +264,9 @@ def save_dataset(voice_id: str) -> Optional[str]:
     """Save and upload the dataset with 24kHz audio files"""
     print("Saving the dataset...")
     try:
-        timestamp = datetime.now().strftime("%y.%m.%d_%H.%M")
+        # Change to Helsinki timezone
+        helsinki_tz = pytz.timezone('Europe/Helsinki')
+        timestamp = datetime.now(helsinki_tz).strftime("%d_%m_%Y_%H_%M")
         os.makedirs(Config.FINETUNED_DIR, exist_ok=True)
         
         zip_path = os.path.join(Config.FINETUNED_DIR, f"dataset_{voice_id}_{timestamp}.zip")

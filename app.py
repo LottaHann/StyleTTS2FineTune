@@ -81,8 +81,8 @@ def generate_training_audio(voice_id: str, training_texts: list) -> None:
                 "text": text,
                 "model_id": "eleven_multilingual_v2",
                 "voice_settings": {
-                    "stability": 0.5,
-                    "similarity_boost": 0.8,
+                    "stability": 0.45,
+                    "similarity_boost": 0.75,
                     "style": 0.00,
                     "use_speaker_boost": True
                 }
@@ -184,6 +184,8 @@ def finetune():
         # Get the training texts
         from training_texts import get_dataset
         training_texts = get_dataset(dataset_percentage)
+
+        FileHandler.clear_directory('makeDataset/tools/trainingdata')
         
         if not training_texts:
             return jsonify({"error": "No training texts generated"}), 500

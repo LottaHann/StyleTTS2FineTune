@@ -279,6 +279,8 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
         
         total_segments = 0
         total_duration = 0
+        processed_segments = 0  # New counter for all processed segments
+        dropped_segments = 0    # New counter for dropped segments
         
         # Process each audio file
         for audio_file in tqdm(audio_files, desc="Processing audio files"):
@@ -369,6 +371,9 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
                             segment_count += 1
                             total_segments += 1
                             total_duration += len(processed)
+                        else:
+                            dropped_segments += 1  # Count dropped segments
+                        processed_segments += 1    # Count all processed segments
                         
                         # Start new segment with current subtitle
                         current_merged = segment
@@ -390,10 +395,21 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
                         
                         total_duration += len(processed)
                         total_segments += 1
+                    else:
+                        dropped_segments += 1  # Count dropped segments
+                    processed_segments += 1    # Count all processed segments
                 
             except Exception as e:
                 print(f"Error processing {audio_file}: {str(e)}")
                 continue
+        
+        # Add final statistics
+        success_rate = (total_segments / processed_segments * 100) if processed_segments > 0 else 0
+        print(f"\nProcessing complete:")
+        print(f"Processed {processed_segments} segments total")
+        print(f"Successfully saved {total_segments} segments")
+        print(f"Dropped {dropped_segments} segments (duration constraints)")
+        print(f"Success rate: {success_rate:.1f}%")
         
         return total_segments, total_duration
         

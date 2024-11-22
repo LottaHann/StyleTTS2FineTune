@@ -11,49 +11,20 @@ import time
 from app_func import (
     AudioProcessor,
     FileHandler,
-    ModelHandler,
-    ConfigHandler,
     clean_exit,
     save_dataset,
-    finetune_process
+    process_uploaded_wavs
 )
 from download_model import download_model
+from makeDataset.tools.transcribe_audio import transcribe_all_files
+from config import Config
 
 # Load environment variables from .env file
 load_dotenv()
 
-class Config:
-    """Application configuration"""
-    # Directory paths
-    AUDIO_DIR = "./makeDataset/tools/audio"
-    DEFAULT_CONFIG_PATH = './default_config.yml'
-    FINAL_CONFIG_PATH = './model/StyleTTS2/Configs/config_ft.yml'
-    RAW_SRT_DIR = './makeDataset/tools/raw_srt'
-    SRT_DIR = './makeDataset/tools/srt'
-    WAV_DIR_FINETUNING = './model/StyleTTS2/Data/wavs'
-    TEMP_DIR = './temp'
-    
-    # Firebase configuration
-    FIREBASE_CREDENTIALS = 'audiobookgen-firebase-adminsdk-mhp3c-3ecc20514f.json'
-    FIREBASE_BUCKET = 'audiobookgen.appspot.com'
-    
-    # ElevenLabs configuration
-    ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
-    ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech"
-    
-    @classmethod
-    def initialize_firebase(cls) -> None:
-        """Initialize Firebase with credentials"""
-        if not cls.ELEVENLABS_API_KEY:
-            raise ValueError("ELEVENLABS_API_KEY environment variable is not set")
-            
-        cred = credentials.Certificate(cls.FIREBASE_CREDENTIALS)
-        firebase_admin.initialize_app(cred, {
-            'storageBucket': cls.FIREBASE_BUCKET
-        })
-
 # Initialize Flask and Firebase
 app = Flask(__name__)
+Config.initialize_directories()
 Config.initialize_firebase()
 
 def generate_training_audio(voice_id: str, training_texts: list) -> None:
@@ -165,15 +136,12 @@ def generate_training_audio(voice_id: str, training_texts: list) -> None:
 
 @app.route('/finetune', methods=['POST'])
 def finetune():
-    """Handle finetuning request"""
+    """Handle dataset creation request"""
     try:
         data = request.json
         voice_id = data.get('voice_id')
-        config_url = data.get('config_url')
-        dataset_only = data.get('dataset_only', False)
         dataset_percentage = data.get('dataset_percentage', 0.05)
-
-        print(f"Received request with dataset_percentage: {dataset_percentage}")
+        wavs_zip_url = data.get('wavs_zip_url')
 
         if not voice_id:
             return jsonify({"error": "Missing voice_id"}), 400
@@ -184,38 +152,60 @@ def finetune():
         # Get the training texts
         from training_texts import get_dataset
         training_texts = get_dataset(dataset_percentage)
-
-        FileHandler.clear_directory('makeDataset/tools/trainingdata')
         
         if not training_texts:
             return jsonify({"error": "No training texts generated"}), 500
 
         # Clear directories
-        for dir_path in [Config.RAW_SRT_DIR, Config.SRT_DIR]:
-            FileHandler.clear_directory(dir_path)
+        FileHandler.clear_directory(Config.TRAINING_DATA_DIR)
+        FileHandler.clear_directory(Config.SRT_DIR)
+        FileHandler.clear_directory(Config.AUDIO_DIR)
 
-        # Generate training audio using ElevenLabs
-        generate_training_audio(voice_id, training_texts)  # Pass training_texts as parameter
+        # Handle audio source: either from zip or generate new ones
+        if wavs_zip_url:
+            # Process uploaded WAV files
+            temp_zip_path = os.path.join(Config.TEMP_DIR, 'wavs.zip')
+            try:
+                print(f"Downloading WAV files from: {wavs_zip_url}")
+                FileHandler.download_file(wavs_zip_url, temp_zip_path)
+                FileHandler.extract_zip(temp_zip_path, Config.AUDIO_DIR)
+                process_uploaded_wavs(Config.AUDIO_DIR, dataset_percentage)
+                
+                # Adjust training_texts length to match the actual number of WAV files
+                wav_files = sorted([f for f in os.listdir(Config.AUDIO_DIR) if f.endswith('.wav')])
+                training_texts = training_texts[:len(wav_files)]
+                
+                if not wav_files:
+                    raise Exception("No WAV files found in downloaded zip")
+                print(f"Successfully processed {len(wav_files)} WAV files")
+                
+            except Exception as e:
+                return jsonify({"error": f"Failed to process WAV files: {str(e)}"}), 500
+            finally:
+                if os.path.exists(temp_zip_path):
+                    os.remove(temp_zip_path)
+        else:
+            # Generate training audio using ElevenLabs
+            generate_training_audio(voice_id, training_texts)
 
-        # Process the generated audio files
+        # Transcribe all audio files
+        transcribe_all_files(Config.AUDIO_DIR, training_texts)
+
+        # Process the audio files
         AudioProcessor.process_dataset(Config.AUDIO_DIR)
-        
-        # Create dataset
+
+        # Create and save dataset
         _create_dataset()
-
-        if dataset_only:
-            return _handle_dataset_only(voice_id)
-
-        # Handle configuration and model
-        _handle_configuration(config_url)
+        dataset_path = save_dataset(voice_id)
         
-        # Train model
-        download_model()
-        ModelHandler.run_finetune(voice_id)
-        ModelHandler.save_finetuned_model(voice_id)
-        FileHandler.clear_directory(Config.TEMP_DIR)
+        if not dataset_path:
+            return jsonify({"error": "Failed to save or upload dataset"}), 500
 
-        return jsonify({"message": f"Model for {voice_id} trained successfully"}), 200
+        FileHandler.clear_directory(Config.TEMP_DIR)
+        return jsonify({
+            "message": "Dataset created and uploaded successfully",
+            "dataset_path": dataset_path
+        }), 200
 
     except Exception as e:
         clean_exit()
@@ -223,48 +213,43 @@ def finetune():
 
 def _create_dataset() -> None:
     """Create and organize dataset structure"""
-    # Clear and create directories
-    FileHandler.clear_directory('model/StyleTTS2/Data')
-    os.makedirs(Config.WAV_DIR_FINETUNING, exist_ok=True)
-    os.makedirs('model/StyleTTS2/Data/raw_wavs', exist_ok=True)
-    FileHandler.clear_directory(Config.WAV_DIR_FINETUNING)
-    
-    # Move segmented files
-    FileHandler.move_files('makeDataset/tools/segmentedAudio', Config.WAV_DIR_FINETUNING)
-    FileHandler.move_files('makeDataset/tools/trainingdata', 'model/StyleTTS2/Data')
-    FileHandler.copy_files('makeDataset/tools/audio', 'model/StyleTTS2/Data/raw_wavs')
-    shutil.copy('./OOD_texts.txt', './model/StyleTTS2/Data')
-
-def _handle_dataset_only(voice_id: str) -> tuple:
-    """Handle dataset-only mode"""
-    dataset_path = save_dataset(voice_id)
-    if not dataset_path:
-        clean_exit()
-        return jsonify({"error": "Failed to save or upload dataset"}), 500
-    
-    FileHandler.clear_directory(Config.TEMP_DIR)
-    return jsonify({
-        "message": "Dataset created and uploaded successfully",
-        "dataset_path": dataset_path
-    }), 200
-
-def _handle_configuration(config_url: str) -> None:
-    """Handle configuration file setup"""
-    if config_url:
-        custom_config_path = os.path.join(Config.TEMP_DIR, 'custom_config.yml')
-        FileHandler.download_file(config_url, custom_config_path)
-        ConfigHandler.update_config(Config.DEFAULT_CONFIG_PATH, custom_config_path)
-    else:
-        shutil.copy(Config.DEFAULT_CONFIG_PATH, Config.FINAL_CONFIG_PATH)
-
-@app.route('/stop_finetune', methods=['POST'])
-def stop_finetune():
-    """Stop the finetuning process"""
-    if finetune_process is None:
-        return jsonify({"error": "No finetuning process is running"}), 400
-    
-    finetune_process.terminate()
-    return jsonify({"message": "Finetuning process stopped"}), 200
+    try:
+        # Create directories first
+        os.makedirs(Config.DATA_DIR, exist_ok=True)
+        os.makedirs(Config.FINAL_WAVS_DIR, exist_ok=True)
+        
+        # Copy required files first before moving anything
+        required_files = [
+            ('train_list.txt', Config.DATA_DIR),
+            ('val_list.txt', Config.DATA_DIR),
+            ('OOD_texts.txt', Config.DATA_DIR)
+        ]
+        
+        # Copy training data files first
+        for filename, dest_dir in required_files:
+            src_path = os.path.join(Config.TRAINING_DATA_DIR, filename)
+            if os.path.exists(src_path):
+                shutil.copy2(src_path, os.path.join(dest_dir, filename))
+            elif filename == 'OOD_texts.txt':
+                # Special case for OOD_texts.txt which is in the root directory
+                shutil.copy2('./OOD_texts.txt', os.path.join(dest_dir, filename))
+        
+        # Verify files exist before proceeding with audio files
+        for filename, dest_dir in required_files:
+            dest_path = os.path.join(dest_dir, filename)
+            if not os.path.exists(dest_path):
+                raise FileNotFoundError(f"Required file not found after copy: {dest_path}")
+        
+        # Now handle audio files
+        print("Moving audio files...")
+        FileHandler.move_files(Config.SEGMENTED_AUDIO_DIR, Config.FINAL_WAVS_DIR)
+        FileHandler.copy_files(Config.AUDIO_DIR, Config.FINAL_RAW_WAVS_DIR)
+        
+        print("Dataset creation completed successfully")
+        
+    except Exception as e:
+        print(f"Error in _create_dataset: {str(e)}")
+        raise
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)

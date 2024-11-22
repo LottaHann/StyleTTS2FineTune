@@ -4,6 +4,12 @@ import os
 from tqdm import tqdm
 import glob
 import math
+from pydub.utils import make_chunks
+import numpy as np
+import soundfile as sf
+import pyloudnorm as pyln
+import io
+from config import Config
 
 def is_silent_rms(audio_chunk, rms_thresh=120):
     """Check if an audio chunk is silent using direct RMS threshold"""
@@ -16,17 +22,11 @@ def clean_segment(audio):
         
     last_part = audio[-400:]
     first_10ms = last_part[:10]
-    print(f"DEBUG: Segment length: {len(audio)}ms")
-    print(f"DEBUG: First 10ms RMS: {first_10ms.rms}")
-    print(f"DEBUG: Last 400ms RMS: {last_part.rms}")
     
     # Using RMS values directly: first_10ms should be very quiet (< 100)
     # but last_part should have some noticeable sound (> 1)
     if is_silent_rms(first_10ms, 100) and last_part.rms > 1:
-        print("DEBUG: Removing last 400ms")
         return audio[:-400]
-    else:
-        print("DEBUG: Keeping full segment")
     
     return audio
 
@@ -69,7 +69,6 @@ def add_silence_buffers(audio, target_silence=200):
 def optimize_silence(audio, min_silence_len=200, max_silence_len=500, step=10):
     """
     Optimize silence segments in the middle of the audio file.
-    Ignores buffer silences at start and end.
     Returns tuple of (processed_audio, original_duration, final_duration)
     """
     original_duration = len(audio)
@@ -77,20 +76,26 @@ def optimize_silence(audio, min_silence_len=200, max_silence_len=500, step=10):
     # Skip the first and last 200ms (buffer zones)
     working_audio = audio[200:-200]
     
-    # Find silence segments
+    # Find silence segments using a more robust detection method
     silence_segments = []
     start = None
+    consecutive_silent = 0
+    required_silent_chunks = 3  # Require multiple consecutive silent chunks
     
-    # Scan for silence segments
+    # Scan for silence segments with improved detection
     for i in range(0, len(working_audio)-step, step):
         chunk = working_audio[i:i+step]
-        is_silent = is_silent_rms(chunk)
+        is_silent = is_silent_rms(chunk, rms_thresh=110)  # Slightly more sensitive threshold
         
-        if is_silent and start is None:
-            start = i
-        elif not is_silent and start is not None:
-            silence_segments.append((start, i))
-            start = None
+        if is_silent:
+            consecutive_silent += 1
+            if start is None and consecutive_silent >= required_silent_chunks:
+                start = i - (step * (required_silent_chunks-1))
+        else:
+            consecutive_silent = 0
+            if start is not None:
+                silence_segments.append((start, i))
+                start = None
     
     # Add last segment if ends with silence
     if start is not None:
@@ -133,192 +138,268 @@ def optimize_silence(audio, min_silence_len=200, max_silence_len=500, step=10):
     
     return result_audio, original_duration, final_duration
 
-def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000):
-    """Main processing function"""
-    print("Processing audio segments...")
-    # Setup directories
-    dirs = {
-        'output': './makeDataset/tools/segmentedAudio/',
-        'bad': './makeDataset/tools/badAudio/',
-        'srt': './makeDataset/tools/srt/',
-        'audio': './makeDataset/tools/audio/',
-        'training': './makeDataset/tools/trainingdata'
-    }
-    
-    for dir_path in dirs.values():
-        os.makedirs(dir_path, exist_ok=True)
-
-    # Add tracking for input files
-    print("\nInput File Analysis:")
-    audio_files = os.listdir(dirs['audio'])
-    srt_files = glob.glob(os.path.join(dirs['srt'], "*.srt"))
-    print(f"Found {len(audio_files)} audio files: {audio_files}")
-    print(f"Found {len(srt_files)} SRT files: {[os.path.basename(f) for f in srt_files]}")
-
-    if not srt_files:
-        raise Exception("No SRT files found!")
-
-    # Clear output file
-    with open(os.path.join(dirs['training'], 'output.txt'), 'w') as _:
-        pass
-
-
-    # first print the total length of all the audio files (in minutes)
-    total_length = sum(len(AudioSegment.from_wav(os.path.join(dirs['audio'], audio_name))) for audio_name in os.listdir(dirs['audio']))
-    print(f"Total length of all audio files: {total_length/1000/60} minutes")
-
-    total_segment_count = 0 
-    total_duration = 0
-
-    # Add counters for tracking
-    stats = {
-        'total_segments_processed': 0,
-        'segments_too_short': 0,
-        'segments_too_long': 0,
-        'segments_kept': 0
-    }
-
-    # Process each SRT file
-    for srt_file in tqdm(srt_files, desc="Processing SRT Files"):
-        print(f"\nProcessing SRT file: {srt_file}")
-        subs = pysrt.open(srt_file)
-        audio_name = os.path.basename(srt_file).replace(".srt", ".wav")
+def calculate_lufs(audio, sample_rate=22050):
+    """Calculate LUFS using pyloudnorm with proper channel handling"""
+    try:
+        # Convert to mono if stereo
+        if audio.channels == 2:
+            audio = audio.set_channels(1)
         
-        if not os.path.exists(os.path.join(dirs['audio'], audio_name)):
-            print(f"WARNING: Missing audio file for {audio_name}")
-            continue
+        # Convert to numpy array (ensuring proper sample width and sample rate)
+        samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+        samples = samples / (1 << (8 * audio.sample_width - 1))  # Normalize to [-1, 1]
+        
+        # Create meter and measure
+        meter = pyln.Meter(audio.frame_rate)  # Use actual frame rate
+        loudness = meter.integrated_loudness(samples)
+        
+        return loudness if not np.isnan(loudness) else -23.0
+        
+    except Exception as e:
+        print(f"Warning: LUFS calculation failed: {str(e)}")
+        return -23.0  # Fallback value
 
-        audio = AudioSegment.from_wav(os.path.join(dirs['audio'], audio_name))
+def normalize_audio_lufs(audio, target_lufs=-20):
+    """Normalize audio to target LUFS"""
+    try:
+        current_lufs = calculate_lufs(audio)
         
-        # Reset segment counter for each file
-        file_segment_count = 0
+        # Avoid extreme adjustments
+        if current_lufs < -50 or current_lufs > 0:
+            print(f"Warning: Unusual LUFS value detected ({current_lufs}), using minimal adjustment")
+            return audio
+            
+        gain_db = target_lufs - current_lufs
         
-        # Process segments
-        current_segment = None
+        # Limit maximum gain adjustment
+        gain_db = max(min(gain_db, 20), -20)
         
-        with open(os.path.join(dirs['training'], 'output.txt'), 'a') as out_file:
-            for i, sub in enumerate(subs):
-                # Calculate cut points
-                current_end = sub.end.ordinal
-                next_start = subs[i + 1].start.ordinal if i < len(subs) - 1 else None
-                
-                # Calculate the start point (using previous midpoint if available)
-                if i > 0:
-                    prev_end = subs[i-1].end.ordinal
-                    start_point = prev_end + (sub.start.ordinal - prev_end) // 2
-                else:
-                    start_point = sub.start.ordinal
-                
-                # Calculate the end point (using next midpoint if available)
-                if next_start is not None:
-                    end_point = current_end + (next_start - current_end) // 2
-                else:
-                    end_point = current_end
+        return audio + gain_db
+        
+    except Exception as e:
+        print(f"Warning: LUFS normalization failed: {str(e)}")
+        return audio
 
-                # Extract and clean segment using the new points
-                segment = audio[start_point:end_point]
-                print(f"\nSubtitle {i+1}/{len(subs)}:")
-                print(f"Original timing: {sub.start} -> {sub.end}")
-                print(f"Modified timing: {start_point}ms -> {end_point}ms")
-                print(f"Text: {sub.text.strip()}")
+def analyze_reference_levels(dirs, target_lufs=-20):
+    """Analyze first few segments to determine level adjustment factor"""
+    try:
+        print("\nAnalyzing reference audio levels...")
+        audio_files = [f for f in os.listdir(dirs['audio']) if f.endswith('.wav')][:5]  # Take first 5 WAV files
+        
+        if not audio_files:
+            print("Warning: No reference WAV files found, using default scaling")
+            return 0
+        
+        lufs_values = []
+        for audio_file in audio_files:
+            try:
+                audio_path = os.path.join(dirs['audio'], audio_file)
+                print(f"Processing file: {audio_path}")
                 
-                print(f"Segment duration before cleaning: {len(segment)}ms")
-                cleaned = clean_segment(segment)
-                print(f"Segment duration after cleaning: {len(cleaned)}ms")
-                
-                if current_segment is None:
-                    current_segment = {
-                        'audio': cleaned,
-                        'text': sub.text.strip(),
-                        'start': start_point
-                    }
+                # Verify file exists and is readable
+                if not os.path.exists(audio_path):
+                    print(f"Warning: File does not exist: {audio_path}")
+                    continue
+                    
+                # Load audio and check if it's valid
+                audio = AudioSegment.from_wav(audio_path)
+                if len(audio) == 0:
+                    print(f"Warning: Empty audio file: {audio_path}")
                     continue
                 
-                # Try to merge with previous segment
-                potential_duration = len(current_segment['audio']) + len(cleaned)
-                
-                if potential_duration <= max_duration:
-                    print(f"Merging segments: {current_segment['text']} + {sub.text.strip()}")
-                    current_segment['audio'] += cleaned
-                    current_segment['text'] = f"{current_segment['text']} {sub.text.strip()}"
-                else:
-                    print(f"Starting new segment due to duration limit")
-                    # Process current segment before starting new one
-                    if current_segment:
-                        audio_out = current_segment['audio']
-                        stats['total_segments_processed'] += 1
-                        
-                        # Add silence buffers
-                        audio_out = add_silence_buffers(audio_out)
-                        
-                        # Optimize silence segments
-                        audio_out, original_duration, final_duration = optimize_silence(audio_out)
-                        
-                        # Save if duration is valid
-                        duration = final_duration
-                        filename = f'{audio_name[:-4]}_{file_segment_count}.wav'
-                        
-                        if duration < min_duration:
-                            print(f"Skipping {filename}: Too short ({duration}ms < {min_duration}ms)")
-                            stats['segments_too_short'] += 1
-                            audio_out.export(os.path.join(dirs['bad'], filename), format='wav')
-                        elif duration > max_duration:
-                            print(f"Skipping {filename}: Too long ({duration}ms > {max_duration}ms)")
-                            stats['segments_too_long'] += 1
-                            audio_out.export(os.path.join(dirs['bad'], filename), format='wav')
-                        else:
-                            stats['segments_kept'] += 1
-                            audio_out.export(os.path.join(dirs['output'], filename), format='wav')
-                            out_file.write(f'{filename}|{current_segment["text"]}|1\n')
-                            print(f"  Saving segment {filename} with text: {current_segment['text']}")
-                            total_duration += duration
-                            file_segment_count += 1
-                            total_segment_count += 1
+                # Calculate LUFS
+                lufs = calculate_lufs(audio)
+                if math.isnan(lufs) or math.isinf(lufs):
+                    print(f"Warning: Invalid LUFS value for {audio_file}")
+                    continue
                     
-                    # Start new segment with current subtitle
-                    current_segment = {
-                        'audio': cleaned,
-                        'text': sub.text.strip(),
-                        'start': start_point
-                    }
+                lufs_values.append(lufs)
+                print(f"File {audio_file}: {lufs:.1f} LUFS")
+                
+            except Exception as e:
+                print(f"Error processing {audio_file}: {str(e)}")
+                continue
+        
+        if not lufs_values:
+            print("Warning: No valid LUFS values calculated, using default scaling")
+            return 0
             
-            # Process the last segment if it exists
-            if current_segment:
-                audio_out = current_segment['audio']
-                stats['total_segments_processed'] += 1
-                
-                audio_out = add_silence_buffers(audio_out)
-                audio_out, original_duration, final_duration = optimize_silence(audio_out)
-                
-                duration = final_duration
-                filename = f'{audio_name[:-4]}_{file_segment_count}.wav'
-                
-                if duration < min_duration:
-                    print(f"Skipping final {filename}: Too short ({duration}ms < {min_duration}ms)")
-                    stats['segments_too_short'] += 1
-                    audio_out.export(os.path.join(dirs['bad'], filename), format='wav')
-                elif duration > max_duration:
-                    print(f"Skipping final {filename}: Too long ({duration}ms > {max_duration}ms)")
-                    stats['segments_too_long'] += 1
-                    audio_out.export(os.path.join(dirs['bad'], filename), format='wav')
-                else:
-                    stats['segments_kept'] += 1
-                    audio_out.export(os.path.join(dirs['output'], filename), format='wav')
-                    out_file.write(f'{filename}|{current_segment["text"]}|1\n')
-                    print(f"  Saving final segment {filename} with text: {current_segment['text']}")
-                    total_duration += duration
-                    file_segment_count += 1
-                    total_segment_count += 1
+        avg_lufs = np.mean(lufs_values)
+        adjustment = target_lufs - avg_lufs
+        print(f"Average LUFS: {avg_lufs:.1f}")
+        print(f"Required adjustment: {adjustment:+.1f} LUFS")
+        return adjustment
+        
+    except Exception as e:
+        print(f"Error in analyze_reference_levels: {str(e)}")
+        print("Using default scaling")
+        return 0
 
-    print(f"\nDetailed Processing Summary:")
-    print(f"Total segments processed: {stats['total_segments_processed']}")
-    print(f"Segments too short (<{min_duration}ms): {stats['segments_too_short']}")
-    print(f"Segments too long (>{max_duration}ms): {stats['segments_too_long']}")
-    print(f"Segments kept: {stats['segments_kept']} ({(stats['segments_kept']/stats['total_segments_processed']*100):.1f}% of total)")
-    print(f"Total duration of kept segments: {total_duration/1000:.2f} seconds")
-    print(f"Average duration of kept segments: {total_duration/total_segment_count:.2f}ms")
-    
-    return total_segment_count, total_duration
+def clamp_audio_levels(audio, min_lufs=-26, max_lufs=-14):
+    """Ensure audio stays within acceptable LUFS range"""
+    try:
+        current_lufs = calculate_lufs(audio)
+        
+        # Only adjust if the value seems reasonable
+        if current_lufs < -50 or current_lufs > 0:
+            return audio
+            
+        if current_lufs < min_lufs:
+            gain_needed = min(min_lufs - current_lufs, 20)  # Limit maximum gain
+            audio = audio + gain_needed
+        elif current_lufs > max_lufs:
+            gain_needed = max(max_lufs - current_lufs, -20)  # Limit maximum reduction
+            audio = audio + gain_needed
+        
+        return audio
+        
+    except Exception as e:
+        print(f"Warning: Level clamping failed: {str(e)}")
+        return audio
+
+def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000):
+    """Main processing function with sentence merging logic"""
+    try:
+        print("\nProcessing audio segments...")
+        Config.initialize_directories()
+        
+        dirs = {
+            'audio': Config.AUDIO_DIR,
+            'srt': Config.SRT_DIR,
+            'segmented_audio': Config.SEGMENTED_AUDIO_DIR,
+            'training_data': Config.TRAINING_DATA_DIR
+        }
+        
+        # Calculate reference levels
+        lufs_adjustment = analyze_reference_levels(dirs)
+        
+        # Get sorted input files
+        audio_files = sorted([f for f in os.listdir(dirs['audio']) if f.endswith('.wav')], 
+                           key=lambda x: int(x.split('.')[0]))
+        
+        total_segments = 0
+        total_duration = 0
+        
+        # Process each audio file
+        for audio_file in tqdm(audio_files, desc="Processing audio files"):
+            try:
+                audio_num = int(audio_file.split('.')[0])
+                srt_file = os.path.join(dirs['srt'], f"{audio_num}.srt")
+                
+                print(f"\n\n=== Processing {audio_file} ===")
+                print(f"SRT file: {srt_file}")
+                
+                if not os.path.exists(srt_file):
+                    print(f"Warning: No SRT file found for {audio_file}")
+                    continue
+                
+                # Load audio and apply LUFS adjustment
+                audio = AudioSegment.from_wav(os.path.join(dirs['audio'], audio_file))
+                
+                # Load subtitles and print them
+                subs = pysrt.open(srt_file)
+                print("\nOriginal SRT contents:")
+                for sub in subs:
+                    print(f"{sub.index}: {sub.start} -> {sub.end}: {sub.text}")
+                
+                # Initialize variables for segment merging
+                current_merged = None
+                current_text = []
+                current_start_ms = None
+                segment_count = 0
+                
+                # Process each subtitle
+                for i, sub in enumerate(subs):
+                    start_ms = (sub.start.hours * 3600000 + 
+                              sub.start.minutes * 60000 + 
+                              sub.start.seconds * 1000 + 
+                              sub.start.milliseconds)
+                    end_ms = (sub.end.hours * 3600000 + 
+                            sub.end.minutes * 60000 + 
+                            sub.end.seconds * 1000 + 
+                            sub.end.milliseconds)
+                    
+                    print(f"\nProcessing subtitle {i+1}:")
+                    print(f"Time: {start_ms}ms -> {end_ms}ms")
+                    print(f"Text: {sub.text.strip()}")
+                    
+                    segment = audio[start_ms:end_ms]
+                    segment = clean_segment(segment)
+                    
+                    # If this is the first segment
+                    if current_merged is None:
+                        current_merged = segment
+                        current_text = [sub.text.strip()]
+                        current_start_ms = start_ms
+                        print("Starting new merged segment")
+                        continue
+                    
+                    # Check if adding this segment would exceed max_duration
+                    potential_duration = end_ms - current_start_ms
+                    
+                    print(f"Current merged duration: {len(current_merged)}ms")
+                    print(f"This segment duration: {len(segment)}ms")
+                    print(f"Potential merged duration: {potential_duration}ms")
+                    
+                    if potential_duration <= max_duration:
+                        # Merge segments by taking audio from start of first to end of current
+                        current_merged = audio[current_start_ms:end_ms]
+                        current_merged = clean_segment(current_merged)
+                        current_text.append(sub.text.strip())
+                        print("Merged with current segment")
+                        print(f"Current text: {' '.join(current_text)}")
+                    else:
+                        # Process and save current merged segment
+                        processed = add_silence_buffers(current_merged, buffer_time)
+                        processed, orig_dur, final_dur = optimize_silence(processed)
+                        
+                        print("\nSaving merged segment:")
+                        print(f"Original duration: {orig_dur}ms")
+                        print(f"Final duration: {final_dur}ms")
+                        print(f"Text: {' '.join(current_text)}")
+                        
+                        if min_duration <= len(processed) <= max_duration:
+                            segment_filename = f"{audio_num}_{segment_count + 1}.wav"
+                            segment_path = os.path.join(dirs['segmented_audio'], segment_filename)
+                            processed.export(segment_path, format='wav')
+                            
+                            with open(os.path.join(dirs['training_data'], 'output.txt'), 'a', encoding='utf-8') as f:
+                                f.write(f"{segment_filename}|{' '.join(current_text)}|1\n")
+                            
+                            segment_count += 1
+                            total_segments += 1
+                            total_duration += len(processed)
+                        
+                        # Start new segment with current subtitle
+                        current_merged = segment
+                        current_text = [sub.text.strip()]
+                        current_start_ms = start_ms
+                
+                # Process final segment if it exists
+                if current_merged is not None:
+                    processed = add_silence_buffers(current_merged, buffer_time)
+                    processed, orig_dur, final_dur = optimize_silence(processed)
+                    
+                    if min_duration <= len(processed) <= max_duration:
+                        segment_filename = f"{audio_num}_{segment_count + 1}.wav"
+                        segment_path = os.path.join(dirs['segmented_audio'], segment_filename)
+                        processed.export(segment_path, format='wav')
+                        
+                        with open(os.path.join(dirs['training_data'], 'output.txt'), 'a', encoding='utf-8') as f:
+                            f.write(f"{segment_filename}|{' '.join(current_text)}|1\n")
+                        
+                        total_duration += len(processed)
+                        total_segments += 1
+                
+            except Exception as e:
+                print(f"Error processing {audio_file}: {str(e)}")
+                continue
+        
+        return total_segments, total_duration
+        
+    except Exception as e:
+        print(f"Error in process_audio_segments: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     test_file = "./raw_3.wav"

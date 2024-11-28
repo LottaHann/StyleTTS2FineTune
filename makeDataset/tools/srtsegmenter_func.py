@@ -282,6 +282,9 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
         processed_segments = 0  # New counter for all processed segments
         dropped_segments = 0    # New counter for dropped segments
         
+        # Add tracking of used filenames
+        used_filenames = set()
+        
         # Process each audio file
         for audio_file in tqdm(audio_files, desc="Processing audio files"):
             try:
@@ -361,12 +364,22 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
                         print(f"Text: {' '.join(current_text)}")
                         
                         if min_duration <= len(processed) <= max_duration:
-                            segment_filename = f"{audio_num}_{segment_count + 1}.wav"
-                            segment_path = os.path.join(dirs['segmented_audio'], segment_filename)
+                            # Generate unique filename
+                            base_filename = f"{audio_num:03d}_{segment_count + 1:03d}.wav"
+                            counter = 1
+                            while base_filename in used_filenames:
+                                counter += 1
+                                base_filename = f"{audio_num:03d}_{segment_count + 1:03d}_{counter}.wav"
+                            
+                            used_filenames.add(base_filename)
+                            segment_path = os.path.join(dirs['segmented_audio'], base_filename)
+                            
+                            # Log the segment being saved
+                            print(f"Saving segment: {base_filename}")
                             processed.export(segment_path, format='wav')
                             
                             with open(os.path.join(dirs['training_data'], 'output.txt'), 'a', encoding='utf-8') as f:
-                                f.write(f"{segment_filename}|{' '.join(current_text)}|1\n")
+                                f.write(f"{base_filename}|{' '.join(current_text)}|1\n")
                             
                             segment_count += 1
                             total_segments += 1
@@ -386,12 +399,22 @@ def process_audio_segments(buffer_time=200, min_duration=1850, max_duration=8000
                     processed, orig_dur, final_dur = optimize_silence(processed)
                     
                     if min_duration <= len(processed) <= max_duration:
-                        segment_filename = f"{audio_num}_{segment_count + 1}.wav"
-                        segment_path = os.path.join(dirs['segmented_audio'], segment_filename)
+                        # Generate unique filename
+                        base_filename = f"{audio_num:03d}_{segment_count + 1:03d}.wav"
+                        counter = 1
+                        while base_filename in used_filenames:
+                            counter += 1
+                            base_filename = f"{audio_num:03d}_{segment_count + 1:03d}_{counter}.wav"
+                        
+                        used_filenames.add(base_filename)
+                        segment_path = os.path.join(dirs['segmented_audio'], base_filename)
+                        
+                        # Log the segment being saved
+                        print(f"Saving segment: {base_filename}")
                         processed.export(segment_path, format='wav')
                         
                         with open(os.path.join(dirs['training_data'], 'output.txt'), 'a', encoding='utf-8') as f:
-                            f.write(f"{segment_filename}|{' '.join(current_text)}|1\n")
+                            f.write(f"{base_filename}|{' '.join(current_text)}|1\n")
                         
                         total_duration += len(processed)
                         total_segments += 1

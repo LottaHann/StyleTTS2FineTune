@@ -407,19 +407,6 @@ SAD = [
 
 def get_dataset(percentage: float) -> list:
     """Get a subset of the training texts based on the given percentage"""
-    print(f"Getting dataset with percentage: {percentage}")
-
-    print(f"Original CONFUSED_SCARED_ANGRY length: {len(CONFUSED_SCARED_ANGRY)}")
-    print(f"Original FEAR length: {len(FEAR)}")
-    print(f"Original ROMANCE length: {len(ROMANCE)}")
-    print(f"Original NORMAL length: {len(NORMAL)}")
-    print(f"Original HAPPY length: {len(HAPPY)}")
-    print(f"Original SAD length: {len(SAD)}")
-    print(f"Original ACTUAL_CHAPTER_1 length: {len(ACTUAL_CHAPTER_1)}")
-    print(f"Original ACTUAL_CHAPTER_2 length: {len(ACTUAL_CHAPTER_2)}")
-    print(f"Original ACTUAL_CHAPTER_3 length: {len(ACTUAL_CHAPTER_3)}")
-    print(f"Original ACTUAL_CHAPTER_4 length: {len(ACTUAL_CHAPTER_4)}")
-    print(f"Original ACTUAL_CHAPTER_5 length: {len(ACTUAL_CHAPTER_5)}")
     
     # Calculate arrays with percentage
     shortened_confused = CONFUSED_SCARED_ANGRY[:int(len(CONFUSED_SCARED_ANGRY) * percentage)]
@@ -434,19 +421,6 @@ def get_dataset(percentage: float) -> list:
     shortened_actual_chapter_4 = ACTUAL_CHAPTER_4[:int(len(ACTUAL_CHAPTER_4) * percentage)]
     shortened_actual_chapter_5 = ACTUAL_CHAPTER_5[:int(len(ACTUAL_CHAPTER_5) * percentage)]
     
-    # Log the number of texts from each category
-    print(f"Confused texts: {len(shortened_confused)}")
-    print(f"Fear texts: {len(shortened_fear)}")
-    print(f"Romance texts: {len(shortened_romance)}")
-    print(f"Normal texts: {len(shortened_normal)}")
-    print(f"Happy texts: {len(shortened_happy)}")
-    print(f"Sad texts: {len(shortened_sad)}")
-    print(f"Actual chapter 1 texts: {len(shortened_actual_chapter_1)}")
-    print(f"Actual chapter 2 texts: {len(shortened_actual_chapter_2)}")
-    print(f"Actual chapter 3 texts: {len(shortened_actual_chapter_3)}")
-    print(f"Actual chapter 4 texts: {len(shortened_actual_chapter_4)}")
-    print(f"Actual chapter 5 texts: {len(shortened_actual_chapter_5)}")
-    
     # Combine all texts
     training_texts = shortened_confused + shortened_fear + shortened_romance + \
                     shortened_normal + shortened_happy + shortened_sad + \
@@ -454,4 +428,10 @@ def get_dataset(percentage: float) -> list:
                     shortened_actual_chapter_4 + shortened_actual_chapter_5
     
     print(f"Total training texts: {len(training_texts)}")
+    total_words = " ".join(training_texts).split()
+    print(f"Total words: {len(total_words)}")
     return training_texts
+
+
+if __name__ == "__main__":
+    get_dataset(1)

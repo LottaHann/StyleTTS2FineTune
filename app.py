@@ -151,7 +151,10 @@ def finetune():
 
         # Get the training texts
         from training_texts import get_dataset
-        training_texts = get_dataset(dataset_percentage)
+        from training_dialogs import get_dialog_array
+        training_texts_1 = get_dataset(dataset_percentage)
+        training_texts_2 = get_dialog_array(dataset_percentage)
+        training_texts = training_texts_1 + training_texts_2
         
         if not training_texts:
             return jsonify({"error": "No training texts generated"}), 500
@@ -195,7 +198,7 @@ def finetune():
         AudioProcessor.process_dataset(Config.AUDIO_DIR)
 
         # Create and save dataset
-        _create_dataset()
+        _create_dataset(dataset_percentage)
         dataset_path = save_dataset(voice_id)
         
         if not dataset_path:
@@ -211,10 +214,14 @@ def finetune():
         clean_exit()
         return jsonify({"error": str(e)}), 500
 
-def _create_dataset() -> None:
+def _create_dataset(dataset_percentage: float) -> None:
     """Create and organize dataset structure"""
     try:
-        # Create directories first
+        # Clear destination directories first
+        FileHandler.clear_directory(Config.FINAL_WAVS_DIR)
+        FileHandler.clear_directory(Config.FINAL_RAW_WAVS_DIR)
+        
+        # Create directories
         os.makedirs(Config.DATA_DIR, exist_ok=True)
         os.makedirs(Config.FINAL_WAVS_DIR, exist_ok=True)
         
@@ -233,6 +240,12 @@ def _create_dataset() -> None:
             elif filename == 'OOD_texts.txt':
                 # Special case for OOD_texts.txt which is in the root directory
                 shutil.copy2('./OOD_texts.txt', os.path.join(dest_dir, filename))
+
+                # take only dataset_percentage of the OOD_texts.txt
+                with open(os.path.join(dest_dir, 'OOD_texts.txt'), 'r') as file:
+                    lines = file.readlines()
+                with open(os.path.join(dest_dir, 'OOD_texts.txt'), 'w') as file:
+                    file.writelines(lines[:int(len(lines) * dataset_percentage)])
         
         # Verify files exist before proceeding with audio files
         for filename, dest_dir in required_files:

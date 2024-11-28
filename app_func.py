@@ -20,6 +20,7 @@ from makeDataset.tools.format_srt import format_srt_file
 from makeDataset.tools.transcribe_audio import transcribe_all_files
 from makeDataset.tools.phonemized_func import phonemize_transcriptions
 from makeDataset.tools.srtsegmenter_func import process_audio_segments
+from makeDataset.tools.resampler import resample_audio
 from config import Config  # Import the global Config
 
 def _print_segmented_audio_lengths() -> None:
@@ -46,6 +47,9 @@ class AudioProcessor:
         print("Processing audio segments...")
         total_segments, total_duration = process_audio_segments()
         print(f"Processed {total_segments} segments with total duration of {total_duration/1000:.2f} seconds")
+
+        print("Resampling audio files...")
+        AudioProcessor._resample_audio_files()
 
         print("Phonemizing transcriptions...")
         AudioProcessor._phonemize_transcriptions()
@@ -76,6 +80,37 @@ class AudioProcessor:
         
         if not success:
             raise Exception("Phonemization failed")
+        
+    @staticmethod
+    def _resample_audio_files() -> None:
+        """Resample audio files to target sample rate (24kHz). Copy to temp and then back in segmented_audio_dir"""
+        temp_dir = Config.TEMP_DIR
+        segmented_audio_dir = Config.SEGMENTED_AUDIO_DIR
+        target_sr = 24000
+
+        try:
+            # clear temp dir
+            FileHandler.clear_directory(temp_dir)
+            
+            print(f"Resampling {len(os.listdir(segmented_audio_dir))} audio files to {target_sr} Hz...")
+            
+            for file in os.listdir(segmented_audio_dir):
+                input_path = os.path.join(segmented_audio_dir, file)
+                output_path = os.path.join(temp_dir, file)
+                
+                if not resample_audio(input_path, output_path, target_sr):
+                    raise Exception(f"Failed to resample file: {file}")
+
+            # delete segmented_audio_dir contents
+            FileHandler.clear_directory(segmented_audio_dir)
+
+            # copy temp contents to segmented_audio_dir
+            FileHandler.copy_files(temp_dir, segmented_audio_dir)
+            
+        except Exception as e:
+            print(f"Error during resampling process: {str(e)}")
+            raise  # Re-raise the exception to be caught by the caller
+
 
 class FileHandler:
     @staticmethod
@@ -114,18 +149,78 @@ class FileHandler:
     @staticmethod
     def move_files(src_folder: str, dest_folder: str) -> None:
         """Move all files from source to destination folder"""
+        moved_files = set()
+        skipped_files = []
+        
         for root, _, files in os.walk(src_folder):
             for file in files:
-                full_file_path = os.path.join(root, file)
-                shutil.move(full_file_path, dest_folder)
+                src_path = os.path.join(root, file)
+                dest_path = os.path.join(dest_folder, file)
+                
+                try:
+                    if os.path.exists(dest_path):
+                        print(f"Warning: Destination file already exists: {dest_path}")
+                        # Generate new unique name
+                        base, ext = os.path.splitext(file)
+                        counter = 1
+                        while os.path.exists(dest_path):
+                            new_name = f"{base}_{counter}{ext}"
+                            dest_path = os.path.join(dest_folder, new_name)
+                            counter += 1
+                        print(f"Using alternative name: {os.path.basename(dest_path)}")
+                    
+                    shutil.move(src_path, dest_path)
+                    moved_files.add(file)
+                except Exception as e:
+                    print(f"Error moving file {file}: {str(e)}")
+                    skipped_files.append((file, str(e)))
+                    continue
+        
+        if skipped_files:
+            print("\nSkipped files during move operation:")
+            for file, error in skipped_files:
+                print(f"- {file}: {error}")
+            print(f"Total files skipped: {len(skipped_files)}")
+        
+        print(f"Successfully moved {len(moved_files)} files")
 
     @staticmethod
     def copy_files(src_folder: str, dest_folder: str) -> None:
         """Copy all files from source to destination folder"""
+        copied_files = set()
+        skipped_files = []
+        
         for root, _, files in os.walk(src_folder):
             for file in files:
-                full_file_path = os.path.join(root, file)
-                shutil.copy(full_file_path, dest_folder)
+                src_path = os.path.join(root, file)
+                dest_path = os.path.join(dest_folder, file)
+                
+                try:
+                    if os.path.exists(dest_path):
+                        print(f"Warning: Destination file already exists: {dest_path}")
+                        # Generate new unique name
+                        base, ext = os.path.splitext(file)
+                        counter = 1
+                        while os.path.exists(dest_path):
+                            new_name = f"{base}_{counter}{ext}"
+                            dest_path = os.path.join(dest_folder, new_name)
+                            counter += 1
+                        print(f"Using alternative name: {os.path.basename(dest_path)}")
+                    
+                    shutil.copy2(src_path, dest_path)
+                    copied_files.add(file)
+                except Exception as e:
+                    print(f"Error copying file {file}: {str(e)}")
+                    skipped_files.append((file, str(e)))
+                    continue
+        
+        if skipped_files:
+            print("\nSkipped files during copy operation:")
+            for file, error in skipped_files:
+                print(f"- {file}: {error}")
+            print(f"Total files skipped: {len(skipped_files)}")
+        
+        print(f"Successfully copied {len(copied_files)} files")
 
 def clean_exit() -> None:
     """Clean up directories and exit"""

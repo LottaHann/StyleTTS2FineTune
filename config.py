@@ -30,7 +30,7 @@ class Config:
     DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, 'default_config.yml')
     
     # Firebase configuration
-    FIREBASE_CREDENTIALS = 'audiobookgen-firebase-adminsdk-mhp3c-3ecc20514f.json'
+    FIREBASE_CREDENTIALS = 'audiobookgen-firebase-adminsdk-mhp3c-544d551487.json'
     FIREBASE_BUCKET = 'audiobookgen.appspot.com'
     
     # ElevenLabs configuration

@@ -27,8 +27,12 @@ app = Flask(__name__)
 Config.initialize_directories()
 Config.initialize_firebase()
 
-def generate_training_audio(voice_id: str, training_texts: list) -> None:
-    """Generate training audio using ElevenLabs API"""
+
+def generate_training_audio(voice_id: str, training_texts: list) -> list:
+    """
+    Generate training audio using ElevenLabs API
+    Returns the filtered training texts that correspond to successfully generated audio files
+    """
     headers = {
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
@@ -38,12 +42,10 @@ def generate_training_audio(voice_id: str, training_texts: list) -> None:
     # Ensure audio directory exists and is empty
     FileHandler.clear_directory(Config.AUDIO_DIR)
     os.makedirs(Config.AUDIO_DIR, exist_ok=True)
-    print(f"Audio directory contents (should be empty): {os.listdir(Config.AUDIO_DIR)}")
+    
+    successful_generations = []  # Will store tuples of (index, text)
 
-    failed_generations = []
-    successful_generations = []
-
-    for idx, text in enumerate(training_texts, 1):
+    for idx, text in enumerate(training_texts, 1):  # Start from 1 for filename matching
         output_path = os.path.join(Config.AUDIO_DIR, f"{idx}.wav")
         temp_mp3_path = os.path.join(Config.AUDIO_DIR, f"temp_{idx}.mp3")
 
@@ -84,55 +86,18 @@ def generate_training_audio(voice_id: str, training_texts: list) -> None:
             if os.path.getsize(output_path) == 0:
                 raise Exception(f"Generated WAV file is empty")
 
-            successful_generations.append(idx)
-            print(f"Successfully generated audio for text {idx}")
+            successful_generations.append((idx, text))
+            print(f"Successfully generated audio {idx}.wav")
 
-        except requests.exceptions.RequestException as e:
-            failed_generations.append((idx, f"API request failed: {str(e)}"))
-            print(f"Failed to generate audio {idx}: API error - {str(e)}")
         except Exception as e:
-            failed_generations.append((idx, f"Processing failed: {str(e)}"))
-            print(f"Failed to generate audio {idx}: {str(e)}")
+            print(f"Failed to generate audio {idx}.wav: {str(e)}")
+            continue  # Skip to next iteration on failure
         finally:
-            # Clean up temp MP3 file if it exists
             if os.path.exists(temp_mp3_path):
                 os.remove(temp_mp3_path)
 
-    # Final verification with retries
-    max_retries = 3
-    for attempt in range(max_retries):
-        actual_files = os.listdir(Config.AUDIO_DIR)
-        print(f"\nFinal Verification (Attempt {attempt + 1}/{max_retries}):")
-        print(f"Expected files: {len(training_texts)}")
-        print(f"Successfully generated: {len(successful_generations)}")
-        print(f"Actually present in directory: {len(actual_files)}")
-        print(f"Files present: {actual_files}")
-        
-        if len(actual_files) == len(training_texts):
-            # Verify each file is readable
-            all_files_readable = True
-            for filename in actual_files:
-                file_path = os.path.join(Config.AUDIO_DIR, filename)
-                try:
-                    with open(file_path, 'rb') as f:
-                        # Try to read the first byte
-                        f.read(1)
-                except Exception as e:
-                    print(f"File {filename} is not readable: {str(e)}")
-                    all_files_readable = False
-            
-            if all_files_readable:
-                print("All files verified and readable")
-                time.sleep(2)  # Wait for file system to stabilize
-                return
-        
-        print(f"Missing files: {set(f'{i}.wav' for i in range(1, len(training_texts) + 1)) - set(actual_files)}")
-        time.sleep(2)  # Wait before retry
-    
-    raise Exception(
-        f"Audio generation verification failed after {max_retries} attempts. "
-        f"Expected {len(training_texts)} files, but {len(actual_files)} were present."
-    )
+    # Return only the texts that were successfully generated
+    return [text for _, text in successful_generations]
 
 @app.route('/finetune', methods=['POST'])
 def finetune():
@@ -174,9 +139,10 @@ def finetune():
                 FileHandler.extract_zip(temp_zip_path, Config.AUDIO_DIR)
                 process_uploaded_wavs(Config.AUDIO_DIR, dataset_percentage)
                 
-                # Adjust training_texts length to match the actual number of WAV files
+                # Filter training_texts based on available WAV files
                 wav_files = sorted([f for f in os.listdir(Config.AUDIO_DIR) if f.endswith('.wav')])
-                training_texts = training_texts[:len(wav_files)]
+                available_indices = [int(f.split('.')[0]) for f in wav_files]
+                training_texts = [text for idx, text in enumerate(training_texts, 1) if idx in available_indices]
                 
                 if not wav_files:
                     raise Exception("No WAV files found in downloaded zip")
@@ -188,8 +154,11 @@ def finetune():
                 if os.path.exists(temp_zip_path):
                     os.remove(temp_zip_path)
         else:
-            # Generate training audio using ElevenLabs
-            generate_training_audio(voice_id, training_texts)
+            # Generate training audio using ElevenLabs and get filtered texts
+            training_texts = generate_training_audio(voice_id, training_texts)
+
+        if not training_texts:
+            return jsonify({"error": "No audio files were successfully generated or processed"}), 500
 
         # Transcribe all audio files
         transcribe_all_files(Config.AUDIO_DIR, training_texts)

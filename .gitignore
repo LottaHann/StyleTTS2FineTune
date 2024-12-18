@@ -6,3 +6,7 @@ finetuned_models/*
 model/StyleTTS2/Models/LibreTTS/*
 model/StyleTTS2/Models/LJSpeech/epoch_2nd_00020.pth
 audiobookgen-firebase-adminsdk-mhp3c-3ecc20514f.json
+
+
+# all pyc files
+*.pyc

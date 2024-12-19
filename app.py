@@ -28,77 +28,6 @@ Config.initialize_directories()
 Config.initialize_firebase()
 
 
-def generate_training_audio(voice_id: str, training_texts: list) -> list:
-    """
-    Generate training audio using ElevenLabs API
-    Returns the filtered training texts that correspond to successfully generated audio files
-    """
-    headers = {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": Config.ELEVENLABS_API_KEY
-    }
-
-    # Ensure audio directory exists and is empty
-    FileHandler.clear_directory(Config.AUDIO_DIR)
-    os.makedirs(Config.AUDIO_DIR, exist_ok=True)
-    
-    successful_generations = []  # Will store tuples of (index, text)
-
-    for idx, text in enumerate(training_texts, 1):  # Start from 1 for filename matching
-        output_path = os.path.join(Config.AUDIO_DIR, f"{idx}.wav")
-        temp_mp3_path = os.path.join(Config.AUDIO_DIR, f"temp_{idx}.mp3")
-
-        try:
-            data = {
-                "text": text,
-                "model_id": "eleven_multilingual_v2",
-                "voice_settings": {
-                    "stability": 0.45,
-                    "similarity_boost": 0.75,
-                    "style": 0.00,
-                    "use_speaker_boost": True
-                }
-            }
-
-            # Make request to ElevenLabs API
-            response = requests.post(
-                f"{Config.ELEVENLABS_API_URL}/{voice_id}",
-                json=data,
-                headers=headers,
-                timeout=30  # Add timeout
-            )
-
-            response.raise_for_status()  # Raise exception for bad status codes
-
-            # Save the audio file temporarily as MP3
-            with open(temp_mp3_path, 'wb') as f:
-                f.write(response.content)
-
-            # Convert MP3 to WAV
-            print(f"Converting audio {idx} to WAV format...")
-            audio = AudioSegment.from_mp3(temp_mp3_path)
-            audio.export(output_path, format='wav')
-
-            # Verify the WAV file exists and has size > 0
-            if not os.path.exists(output_path):
-                raise Exception(f"Generated WAV file is missing")
-            if os.path.getsize(output_path) == 0:
-                raise Exception(f"Generated WAV file is empty")
-
-            successful_generations.append((idx, text))
-            print(f"Successfully generated audio {idx}.wav")
-
-        except Exception as e:
-            print(f"Failed to generate audio {idx}.wav: {str(e)}")
-            continue  # Skip to next iteration on failure
-        finally:
-            if os.path.exists(temp_mp3_path):
-                os.remove(temp_mp3_path)
-
-    # Return only the texts that were successfully generated
-    return [text for _, text in successful_generations]
-
 @app.route('/finetune', methods=['POST'])
 def finetune():
     """Handle dataset creation request"""
@@ -182,6 +111,135 @@ def finetune():
     except Exception as e:
         clean_exit()
         return jsonify({"error": str(e)}), 500
+
+
+def get_all_history_items(voice_id: str, api_key: str) -> list:
+    """Fetch all history items for a voice using pagination"""
+    headers = {'xi-api-key': api_key}
+    all_items = []
+    has_more = True
+    start_after_id = None
+    
+    while has_more:
+        url = f'https://api.elevenlabs.io/v1/history?page_size=1000&voice_id={voice_id}'
+        if start_after_id:
+            url += f'&start_after_history_item_id={start_after_id}'
+            
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            print(f"Error fetching history: {response.status_code}")
+            break
+            
+        data = response.json()
+        history_items = data.get('history', [])
+        all_items.extend(history_items)
+        
+        has_more = data.get('has_more', False)
+        if has_more and history_items:
+            start_after_id = history_items[-1]['history_item_id']
+
+    print(f"Found {len(all_items)} history items")
+    return [(item['history_item_id'], item['text']) for item in all_items]
+
+def generate_training_audio(voice_id: str, training_texts: list) -> list:
+    """
+    Generate training audio using ElevenLabs API
+    Returns the filtered training texts that correspond to successfully generated audio files
+    """
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": Config.ELEVENLABS_API_KEY
+    }
+
+    # Ensure audio directory exists and is empty
+    FileHandler.clear_directory(Config.AUDIO_DIR)
+    os.makedirs(Config.AUDIO_DIR, exist_ok=True)
+    
+    # Get existing history items
+    voice_history = get_all_history_items(voice_id, Config.ELEVENLABS_API_KEY)
+    successful_generations = []  # Will store tuples of (index, text)
+
+    for idx, text in enumerate(training_texts, 1):
+        output_path = os.path.join(Config.AUDIO_DIR, f"{idx}.wav")
+        temp_mp3_path = os.path.join(Config.AUDIO_DIR, f"temp_{idx}.mp3")
+
+        try:
+            # Check if we already generated this text
+            matches = [(id, txt) for id, txt in voice_history if txt == text]
+            
+            if matches:
+                # Download existing audio
+                history_item_id = matches[0][0]
+                download_data = {
+                    'history_item_ids': [history_item_id],
+                    'output_format': 'wav'
+                }
+                
+                response = requests.post(
+                    'https://api.elevenlabs.io/v1/history/download',
+                    headers=headers,
+                    json=download_data
+                )
+                
+                if response.status_code == 200:
+                    with open(output_path, 'wb') as f:
+                        f.write(response.content)
+                    print(f"Successfully downloaded existing audio {idx}.wav")
+                    successful_generations.append((idx, text))
+                    continue
+                else:
+                    print(f"Failed to download existing audio {idx}, will regenerate")
+
+            # If no match found or download failed, generate new audio
+            data = {
+                "text": text,
+                "model_id": "eleven_multilingual_v2",
+                "voice_settings": {
+                    "stability": 0.45,
+                    "similarity_boost": 0.75,
+                    "style": 0.00,
+                    "use_speaker_boost": True
+                }
+            }
+
+            # Make request to ElevenLabs API
+            response = requests.post(
+                f"{Config.ELEVENLABS_API_URL}/{voice_id}",
+                json=data,
+                headers=headers,
+                timeout=30  # Add timeout
+            )
+
+            response.raise_for_status()  # Raise exception for bad status codes
+
+            # Save the audio file temporarily as MP3
+            with open(temp_mp3_path, 'wb') as f:
+                f.write(response.content)
+
+            # Convert MP3 to WAV
+            print(f"Converting audio {idx} to WAV format...")
+            audio = AudioSegment.from_mp3(temp_mp3_path)
+            audio.export(output_path, format='wav')
+
+            # Verify the WAV file exists and has size > 0
+            if not os.path.exists(output_path):
+                raise Exception(f"Generated WAV file is missing")
+            if os.path.getsize(output_path) == 0:
+                raise Exception(f"Generated WAV file is empty")
+
+            successful_generations.append((idx, text))
+            print(f"Successfully generated audio {idx}.wav")
+
+        except Exception as e:
+            print(f"Failed to generate audio {idx}.wav: {str(e)}")
+            continue  # Skip to next iteration on failure
+        finally:
+            if os.path.exists(temp_mp3_path):
+                os.remove(temp_mp3_path)
+
+    # Return only the texts that were successfully generated
+    return [text for _, text in successful_generations]
 
 def _create_dataset(dataset_percentage: float) -> None:
     """Create and organize dataset structure"""

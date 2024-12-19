@@ -18,7 +18,7 @@ client = openai.Client(api_key=API_KEY)
 import re
 
 def transcribe_audio_with_timestamps(audio_path, original_text):
-    print(f"Transcribing {audio_path}...")
+    print(f"\nTranscribing {audio_path}...")
     audio_file = open(audio_path, "rb")
     
     transcript = client.audio.transcriptions.create(
@@ -33,45 +33,99 @@ def transcribe_audio_with_timestamps(audio_path, original_text):
     transcript_dict = transcript.model_dump() if hasattr(transcript, 'model_dump') else transcript
     audio_duration = transcript_dict.get("duration", 0)
     
+    # Add debug log to see what Whisper returned
+    print("\nWhisper transcription words:")
+    for word_data in transcript_dict["words"]:
+        word = word_data.get("word", word_data.word if hasattr(word_data, "word") else "???")
+        start = word_data.get("start", word_data.start if hasattr(word_data, "start") else -1)
+        end = word_data.get("end", word_data.end if hasattr(word_data, "end") else -1)
+        print(f"Word: {word:<20} Start: {start:<8.3f} End: {end:<8.3f}")
+    
     try:
-        sentences_with_endings = []
+        # Store original sentences with all punctuation for final output
+        original_sentences_with_endings = []
         current_sentence = ""
         i = 0
         while i < len(original_text):
+            # Handle ellipsis first
             if original_text[i:i+3] == "...":
-                current_sentence += "..."
-                sentences_with_endings.append((current_sentence.strip(), "..."))
-                current_sentence = ""
+                if current_sentence.strip():  # Only add if there's content
+                    original_sentences_with_endings.append((current_sentence.strip(), "..."))
+                    current_sentence = ""
                 i += 3
             elif original_text[i] in ".!?":
                 current_sentence += original_text[i]
-                sentences_with_endings.append((current_sentence.strip(), original_text[i]))
+                if current_sentence.strip():  # Only add if there's content
+                    original_sentences_with_endings.append((current_sentence.strip(), original_text[i]))
                 current_sentence = ""
                 i += 1
             else:
                 current_sentence += original_text[i]
                 i += 1
         
+        # Handle any remaining text
         if current_sentence.strip():
-            sentences_with_endings.append((current_sentence.strip(), ""))
-        
-        sentences = [s[0] for s in sentences_with_endings]
-        
+            original_sentences_with_endings.append((current_sentence.strip(), ""))
+
+        # Filter out empty sentences and ensure we have at least one
+        original_sentences_with_endings = [(s, e) for s, e in original_sentences_with_endings if s.strip()]
+        if not original_sentences_with_endings:
+            original_sentences_with_endings = [(original_text, "")]
+
+        # if a sentence is just one word, add it to the next or previous sentence
+        i = 0
+        while i < len(original_sentences_with_endings):
+            if len(original_sentences_with_endings[i][0].split()) == 1:
+                if i > 0:
+                    # Create new tuple with combined text
+                    new_sentence = (
+                        original_sentences_with_endings[i-1][0] + " " + original_sentences_with_endings[i][0],
+                        original_sentences_with_endings[i-1][1]
+                    )
+                    original_sentences_with_endings[i-1] = new_sentence
+                    original_sentences_with_endings.pop(i)
+                    i -= 1  # Move back one since we removed an element
+                elif i < len(original_sentences_with_endings) - 1:
+                    # Create new tuple with combined text
+                    new_sentence = (
+                        original_sentences_with_endings[i][0] + " " + original_sentences_with_endings[i+1][0],
+                        original_sentences_with_endings[i+1][1]
+                    )
+                    original_sentences_with_endings[i:i+2] = [new_sentence]
+                else:
+                    # Single word is the only sentence, leave it alone
+                    pass
+            i += 1
+
+        # Create cleaned versions for matching
+        cleaned_sentences = []
+        for sentence, _ in original_sentences_with_endings:
+            # Keep letters, spaces, and apostrophes between letters
+            cleaned = ''
+            for i, char in enumerate(sentence):
+                if char.isalpha() or char.isspace():
+                    cleaned += char.lower()
+                elif char == "'" and i > 0 and i < len(sentence) - 1:
+                    # Check if apostrophe is between two letters
+                    if sentence[i-1].isalpha() and sentence[i+1].isalpha():
+                        cleaned += char
+            cleaned_sentences.append(cleaned)
+
         # Create a copy of words that we'll remove from as we process sentences
         remaining_words = transcript_dict["words"].copy()
         
         # First pass: get raw timestamps for each sentence
         raw_timestamps = []
-        for sentence in sentences:
-            first_word = sentence.split()[0].lower()
-            last_word = sentence.split()[-1].lower()
-            # Remove any punctuation from last_word
-            last_word = re.sub(r'[.,!?]', '', last_word)
-
-            print(f"First word: {first_word}, Last word: {last_word}, Sentence: {sentence}")
+        for sentence, cleaned_sentence in zip(original_sentences_with_endings, cleaned_sentences):
+            first_word = cleaned_sentence.split()[0]
+            last_word = cleaned_sentence.split()[-1]
+            
+            print(f"\nProcessing sentence: {sentence[0]}")
+            print(f"Looking for first word: '{first_word}' and last word: '{last_word}'")
             start_time = None
             end_time = None
             
+            print("\nSearching through remaining words:")
             for word_data in remaining_words[:]:
                 word = word_data.word if hasattr(word_data, 'word') else word_data["word"]
                 start = word_data.start if hasattr(word_data, 'start') else word_data["start"]
@@ -79,17 +133,23 @@ def transcribe_audio_with_timestamps(audio_path, original_text):
                 
                 # Clean the word for comparison
                 cleaned_word = re.sub(r'[.,!?]', '', word.lower().strip())
+                print(f"Comparing '{cleaned_word}' with first_word='{first_word}' last_word='{last_word}'")
                 
                 if start_time is None and cleaned_word.startswith(first_word):
                     start_time = start
-                    print(f"Located first word: {word} at {start_time}")
-                if cleaned_word == last_word:  # Changed from endswith to exact match
+                    print(f"✓ Found first word match: '{cleaned_word}' at {start_time}")
+                if cleaned_word == last_word:
                     end_time = end
-                    print(f"Located last word: {word} at {end_time}")
+                    print(f"✓ Found last word match: '{cleaned_word}' at {end_time}")
                     if start_time is not None:
                         cutoff_index = remaining_words.index(word_data) + 1
                         remaining_words = remaining_words[cutoff_index:]
                         break
+            
+            if start_time is None:
+                print(f"❌ Failed to find start time for word: '{first_word}'")
+            if end_time is None:
+                print(f"❌ Failed to find end time for word: '{last_word}'")
             
             if start_time is not None and end_time is not None:
                 raw_timestamps.append((start_time, end_time))
@@ -122,7 +182,7 @@ def transcribe_audio_with_timestamps(audio_path, original_text):
         srt_content = []
         segment_counter = 1
         
-        for i, ((sentence, ending), (start_time, end_time)) in enumerate(zip(sentences_with_endings, adjusted_timestamps)):
+        for i, ((sentence, ending), (start_time, end_time)) in enumerate(zip(original_sentences_with_endings, adjusted_timestamps)):
             duration = end_time - start_time
 
             print(f"Duration: {duration}")
@@ -239,7 +299,11 @@ def transcribe_audio_with_timestamps(audio_path, original_text):
         return "\n".join(srt_content)
         
     except Exception as e:
-        print(f"Warning: Falling back to single segment due to error: {str(e)}")
+        print(f"\n❌ Original Error:")
+        import traceback
+        traceback.print_exc()  # This will print the full error stack trace
+        print(f"\nOriginal text: {original_text}")
+        
         # Create single segment SRT
         srt_content = [
             "1",
